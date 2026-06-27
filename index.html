@@ -554,7 +554,7 @@
 // ══════════════════════════════════════
 const SUPABASE_URL = 'https://fakoavxxabsatafwllxo.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ══════════════════════════════════════
 //  AUTH
@@ -592,7 +592,7 @@ async function handleLogin() {
   if (!email || !password) { showError('auth-error', 'يرجى إدخال البريد وكلمة المرور'); return; }
   const btn = document.getElementById('login-btn');
   btn.disabled = true; btn.textContent = '...جاري التحقق';
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  const { data, error } = await db.auth.signInWithPassword({ email, password });
   btn.disabled = false; btn.textContent = 'دخول ←';
   if (error) { showError('auth-error', 'بيانات غير صحيحة، حاول مجدداً'); return; }
   await checkUserAccess(data.user);
@@ -607,18 +607,18 @@ async function handleSignup() {
   if (password.length < 6) { showError('auth-error', 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
   const btn = document.getElementById('signup-btn');
   btn.disabled = true; btn.textContent = '...جاري الإنشاء';
-  const { data, error } = await supabase.auth.signUp({ email, password });
+  const { data, error } = await db.auth.signUp({ email, password });
   btn.disabled = false; btn.textContent = 'إنشاء حساب ←';
   if (error) { showError('auth-error', 'حدث خطأ، جرب بريداً آخر'); return; }
   // Create profile row
-  await supabase.from('profiles').insert({ email, is_approved: false });
+  await db.from('profiles').insert({ email, is_approved: false });
   showSuccess('auth-success', 'تم إنشاء الحساب! يمكنك تسجيل الدخول الآن');
   switchTab('login');
 }
 
 async function checkUserAccess(user) {
   currentUser = user;
-  const { data: profile } = await supabase.from('profiles').select('*').eq('email', user.email).single();
+  const { data: profile } = await db.from('profiles').select('*').eq('email', user.email).single();
   if (profile && profile.is_approved) {
     document.getElementById('user-email-display').textContent = user.email;
     initApp();
@@ -635,7 +635,7 @@ async function submitAccessKey() {
   btn.disabled = true; btn.textContent = '...جاري التحقق';
 
   // Check key in access_keys table
-  const { data: keyData } = await supabase.from('access_keys').select('*').eq('key', key).eq('is_used', false).single();
+  const { data: keyData } = await db.from('access_keys').select('*').eq('key', key).eq('is_used', false).single();
 
   if (!keyData) {
     btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
@@ -644,9 +644,9 @@ async function submitAccessKey() {
   }
 
   // Mark key as used
-  await supabase.from('access_keys').update({ is_used: true, used_by: currentUser.email }).eq('key', key);
+  await db.from('access_keys').update({ is_used: true, used_by: currentUser.email }).eq('key', key);
   // Approve user
-  await supabase.from('profiles').update({ is_approved: true, access_key: key }).eq('email', currentUser.email);
+  await db.from('profiles').update({ is_approved: true, access_key: key }).eq('email', currentUser.email);
 
   btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
   showSuccess('pending-success', '✅ تم التفعيل! جاري الدخول...');
@@ -658,7 +658,7 @@ async function submitAccessKey() {
 }
 
 async function handleLogout() {
-  await supabase.auth.signOut();
+  await db.auth.signOut();
   currentUser = null;
   showPage('auth');
 }
@@ -1143,7 +1143,7 @@ function retryLast() { if (lastMode==='qcm') { clearDraft('qcm'); startQCM(); } 
 //  INIT — Check session on load
 // ══════════════════════════════════════
 (async function() {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await db.auth.getSession();
   if (session?.user) {
     await checkUserAccess(session.user);
   } else {
