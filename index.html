@@ -635,7 +635,7 @@ async function submitAccessKey() {
   btn.disabled = true; btn.textContent = '...جاري التحقق';
 
   // Check key in access_keys table
-  const { data: keyData } = await db.from('access_keys').select('*').eq('key', key).eq('is_used', false).single();
+  const { data: keyData } = await db.from('('('access_keys'))).select('*').eq('key', key).eq('is_used', false).single();
 
   if (!keyData) {
     btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
@@ -644,7 +644,7 @@ async function submitAccessKey() {
   }
 
   // Mark key as used
-  await db.from('access_keys').update({ is_used: true, used_by: currentUser.email }).eq('key', key);
+  await db.from('('('access_keys'))).update({ is_used: true, used_by: currentUser.email }).eq('key', key);
   // Approve user
   await db.from('profiles').update({ is_approved: true, access_key: key }).eq('email', currentUser.email);
 
