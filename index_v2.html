@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>بطاقات المراجعة</title>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --bg: linear-gradient(135deg, #0a0a0f 0%, #0f1520 50%, #0a0a0f 100%);
+    --surface: rgba(255,255,255,0.03);
+    --surface-hover: rgba(255,255,255,0.07);
+    --border: rgba(201,168,76,0.22);
+    --border-hover: rgba(201,168,76,0.55);
+    --text: #e8dcc8;
+    --text-sub: #8a7a60;
+    --text-muted: #5a4e38;
+    --accent: #c9a84c;
+    --accent-dim: rgba(201,168,76,0.15);
+    --accent-border: rgba(201,168,76,0.27);
+    --card-front: linear-gradient(145deg,#1a1408,#0d1a2a);
+    --card-back: linear-gradient(145deg,#0d1a2a,#1a1408);
+    --card-border-front: rgba(201,168,76,0.33);
+    --card-border-back: rgba(74,122,155,0.33);
+    --input-bg: rgba(255,255,255,0.04);
+    --input-border: rgba(255,255,255,0.18);
+    --track: rgba(255,255,255,0.08);
+    --correct-bg: rgba(74,170,112,0.12);
+    --correct-border: #4aaa70;
+    --correct-text: #6adca0;
+    --wrong-bg: rgba(170,74,74,0.12);
+    --wrong-border: #aa4a4a;
+    --wrong-text: #da8a8a;
+    --neutral-bg: rgba(255,255,255,0.04);
+    --neutral-border: rgba(255,255,255,0.14);
+    --neutral-text: #d4c8b0;
+    --toggle-bg: rgba(255,255,255,0.08);
+    --btn-text: #0a0a0f;
+    --shadow: rgba(201,168,76,0.08);
+  }
+  [data-theme="light"] {
+    --bg: linear-gradient(135deg, #f5f0e8 0%, #ebe3d4 50%, #f5f0e8 100%);
+    --surface: rgba(255,255,255,0.75);
+    --surface-hover: rgba(255,255,255,0.95);
+    --border: rgba(160,112,48,0.22);
+    --border-hover: rgba(160,112,48,0.55);
+    --text: #2a1f0e;
+    --text-sub: #6b5530;
+    --text-muted: #9a8060;
+    --accent: #a07030;
+    --accent-dim: rgba(160,112,48,0.12);
+    --accent-border: rgba(160,112,48,0.27);
+    --card-front: linear-gradient(145deg,#fffbf4,#f0e8d8);
+    --card-back: linear-gradient(145deg,#e8f0f8,#f4ede0);
+    --card-border-front: rgba(160,112,48,0.4);
+    --card-border-back: rgba(74,122,155,0.4);
+    --input-bg: rgba(255,255,255,0.85);
+    --input-border: rgba(100,80,40,0.25);
+    --track: rgba(0,0,0,0.08);
+    --correct-bg: rgba(40,140,80,0.1);
+    --correct-border: #3a9a60;
+    --correct-text: #1e6e3e;
+    --wrong-bg: rgba(180,60,60,0.1);
+    --wrong-border: #c04040;
+    --wrong-text: #8a1e1e;
+    --neutral-bg: rgba(255,255,255,0.6);
+    --neutral-border: rgba(100,80,40,0.2);
+    --neutral-text: #3a2a10;
+    --toggle-bg: rgba(0,0,0,0.07);
+    --btn-text: #fff;
+    --shadow: rgba(160,112,48,0.12);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Cairo', 'Amiri', serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    direction: rtl;
+    transition: background 0.3s, color 0.3s;
+  }
+
+  .page { display: none; flex-direction: column; align-items: center; padding: 18px 16px 40px; min-height: 100vh; }
+  .page.active { display: flex; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+  .page.active { animation: fadeIn 0.25s ease; }
+
+  /* ── AUTH PAGES ── */
+  .auth-box {
+    width: 100%; max-width: 400px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 24px; padding: 32px 28px; margin-top: 40px;
+  }
+  .auth-logo { text-align: center; margin-bottom: 28px; }
+  .auth-logo-icon { font-size: 2.5rem; margin-bottom: 8px; }
+  .auth-logo-title {
+    font-family: 'Amiri', serif; font-size: 1.6rem;
+    font-weight: 700; color: var(--accent);
+  }
+  .auth-logo-sub { font-size: 0.8rem; color: var(--text-sub); margin-top: 4px; }
+  .auth-tabs {
+    display: flex; background: var(--toggle-bg);
+    border-radius: 12px; padding: 4px; margin-bottom: 24px;
+  }
+  .auth-tab {
+    flex: 1; padding: 9px; border: none; border-radius: 9px;
+    background: transparent; color: var(--text-sub);
+    font-family: 'Cairo', sans-serif; font-size: 0.88rem;
+    font-weight: 700; cursor: pointer; transition: all 0.2s;
+  }
+  .auth-tab.active {
+    background: linear-gradient(135deg, var(--accent), #a07030);
+    color: var(--btn-text);
+  }
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 0.8rem; color: var(--text-sub); margin-bottom: 6px; font-weight: 600; }
+  .form-input {
+    width: 100%; padding: 12px 14px;
+    background: var(--input-bg); border: 1px solid var(--input-border);
+    border-radius: 12px; color: var(--text);
+    font-family: 'Cairo', sans-serif; font-size: 0.9rem;
+    outline: none; transition: border-color 0.2s; direction: ltr; text-align: left;
+  }
+  .form-input:focus { border-color: var(--accent); }
+  .form-input::placeholder { color: var(--text-muted); }
+  .btn {
+    padding: 10px 22px; border-radius: 10px; border: none;
+    cursor: pointer; font-size: 0.9rem; font-family: 'Cairo', sans-serif;
+    font-weight: 700; transition: all 0.2s; outline: none;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent), #a07030);
+    color: var(--btn-text); width: 100%; padding: 13px;
+    font-size: 0.95rem; border-radius: 12px; margin-top: 6px;
+  }
+  .btn-primary:not(:disabled):hover { filter: brightness(1.1); }
+  .btn-ghost { background: transparent; border: 1px solid var(--accent-border); color: var(--accent); }
+  .btn-ghost:not(:disabled):hover { background: var(--accent-dim); }
+  .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--input-border); }
+  .btn-secondary:hover { background: var(--surface-hover); }
+  .auth-error {
+    background: rgba(170,74,74,0.12); border: 1px solid #aa4a4a;
+    border-radius: 10px; padding: 10px 14px; font-size: 0.82rem;
+    color: #da8a8a; margin-bottom: 14px; display: none;
+  }
+  .auth-success {
+    background: rgba(74,170,112,0.12); border: 1px solid #4aaa70;
+    border-radius: 10px; padding: 10px 14px; font-size: 0.82rem;
+    color: #6adca0; margin-bottom: 14px; display: none;
+  }
+
+  /* ── PENDING PAGE ── */
+  .pending-box {
+    width: 100%; max-width: 400px; text-align: center;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 24px; padding: 40px 28px; margin-top: 40px;
+  }
+  .pending-icon { font-size: 3rem; margin-bottom: 16px; }
+  .pending-title { font-family: 'Amiri', serif; font-size: 1.4rem; color: var(--accent); margin-bottom: 10px; }
+  .pending-desc { font-size: 0.85rem; color: var(--text-sub); line-height: 1.7; margin-bottom: 28px; }
+  .key-input-wrap { margin-bottom: 16px; }
+  .key-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
+  .key-divider-line { flex: 1; height: 1px; background: var(--border); }
+  .key-divider-text { font-size: 0.75rem; color: var(--text-muted); }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    width: 100%; max-width: 480px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 18px;
+  }
+  .theme-btn {
+    background: var(--toggle-bg); border: none; border-radius: 10px;
+    padding: 6px 13px; cursor: pointer; font-size: 1.1rem; transition: background 0.2s;
+  }
+  .theme-btn:hover { background: var(--border); }
+  .progress-pill { display: flex; align-items: center; gap: 8px; font-family: 'Cairo', sans-serif; }
+  .progress-pill span { font-size: 0.73rem; color: var(--text-sub); }
+  .pill {
+    background: var(--accent-dim); border: 1px solid var(--accent-border);
+    color: var(--accent); border-radius: 20px; padding: 3px 13px;
+    font-size: 0.8rem; font-weight: 700;
+  }
+  .user-bar {
+    width: 100%; max-width: 480px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 10px;
+  }
+  .user-email { font-size: 0.72rem; color: var(--text-muted); }
+  .logout-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-sub); border-radius: 8px; padding: 4px 10px;
+    font-size: 0.72rem; cursor: pointer; font-family: 'Cairo', sans-serif;
+  }
+  .logout-btn:hover { border-color: var(--wrong-border); color: var(--wrong-text); }
+
+  /* ── SUBJECT SWITCHER ── */
+  .subject-switcher {
+    display: flex; gap: 0; width: 100%; max-width: 420px;
+    background: var(--toggle-bg); border-radius: 14px; padding: 4px;
+    margin-bottom: 18px;
+  }
+  .subject-btn {
+    flex: 1; padding: 10px 8px; border: none; border-radius: 10px;
+    background: transparent; color: var(--text-sub);
+    font-family: 'Cairo', sans-serif; font-size: 0.85rem; font-weight: 700;
+    cursor: pointer; transition: all 0.25s; display: flex; align-items: center;
+    justify-content: center; gap: 6px;
+  }
+  .subject-btn.active {
+    background: linear-gradient(135deg, var(--accent), #a07030);
+    color: var(--btn-text); box-shadow: 0 2px 10px var(--shadow);
+  }
+  .subject-btn:not(.active):hover { background: var(--surface-hover); color: var(--text); }
+
+  /* ── PAGE HEADER ── */
+  .page-header { text-align: center; margin-bottom: 22px; }
+  .page-title {
+    font-family: 'Amiri', serif;
+    font-size: clamp(1.3rem, 4vw, 1.9rem); font-weight: 700;
+    color: var(--accent); letter-spacing: 0.04em; margin-bottom: 4px;
+  }
+  .page-subtitle { font-size: 0.85rem; color: var(--text-sub); margin-top: 2px; }
+  .page-badge {
+    display: inline-block; background: var(--accent-dim);
+    border: 1px solid var(--accent-border); color: var(--accent);
+    border-radius: 20px; padding: 3px 14px; font-size: 0.74rem; margin-top: 6px;
+  }
+
+  /* ── DASHBOARD ── */
+  .dash {
+    width: 100%; max-width: 420px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; padding: 18px 20px; margin-bottom: 22px;
+  }
+  .dash-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+  .dash-label { font-size: 0.73rem; color: var(--text-sub); letter-spacing: 0.08em; margin-bottom: 1px; }
+  .dash-big { font-size: 2rem; font-weight: 700; color: var(--accent); line-height: 1; }
+  .dash-mastered { font-size: 1.5rem; font-weight: 700; }
+  .dash-mastered small { font-size: 0.85rem; color: var(--text-sub); }
+  .bar-wrap { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; margin: 6px 0 3px; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+  .dots { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--track); transition: background 0.3s; cursor: help; }
+  .dash-sessions { font-size: 0.69rem; color: var(--text-muted); margin-top: 7px; }
+
+  .mode-grid { display: grid; grid-template-columns: 1fr; gap: 13px; width: 100%; max-width: 420px; }
+  .mode-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 20px; cursor: pointer;
+    transition: all 0.2s; text-align: center;
+  }
+  .mode-card:hover { background: var(--surface-hover); border-color: var(--border-hover); }
+  .mode-icon { font-size: 1.9rem; margin-bottom: 7px; }
+  .mode-title { font-size: 1.02rem; font-weight: 700; color: var(--accent); margin-bottom: 5px; }
+  .mode-desc { font-size: 0.8rem; color: var(--text-sub); line-height: 1.5; }
+
+  /* ── FLASHCARD ── */
+  .card-wrap { width: 100%; max-width: 480px; perspective: 1000px; }
+  .card-inner {
+    position: relative; width: 100%; min-height: 230px;
+    cursor: pointer; transform-style: preserve-3d;
+    transform: rotateY(0); transition: transform 0.5s ease;
+  }
+  .card-inner.flipped { transform: rotateY(180deg); }
+  .card-face {
+    position: absolute; width: 100%; min-height: 230px;
+    backface-visibility: hidden; -webkit-backface-visibility: hidden;
+    border-radius: 20px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 28px 24px; text-align: center;
+  }
+  .card-front { background: var(--card-front); border: 1px solid var(--card-border-front); box-shadow: 0 8px 32px var(--shadow); }
+  .card-back { background: var(--card-back); border: 1px solid var(--card-border-back); transform: rotateY(180deg); }
+  .card-term { font-family: 'Amiri', serif; font-size: clamp(1.2rem,4vw,1.7rem); font-weight: 700; color: var(--accent); margin-bottom: 10px; }
+  .card-scores { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; justify-content: center; }
+  .score-tag { font-size: 0.7rem; background: var(--accent-dim); color: var(--accent); border-radius: 12px; padding: 2px 8px; }
+  .card-hint { font-size: 0.73rem; color: var(--text-muted); letter-spacing: 0.1em; }
+  .card-def { font-size: 0.9rem; color: var(--text); line-height: 1.7; }
+  .nav { display: flex; gap: 12px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+
+  /* ── QCM ── */
+  .qcm-box { width: 100%; max-width: 480px; }
+  .qcm-term-box { background: var(--card-front); border: 1px solid var(--card-border-front); border-radius: 16px; padding: 20px 24px; text-align: center; margin-bottom: 18px; }
+  .qcm-label { font-size: 0.73rem; color: var(--text-muted); margin-bottom: 5px; letter-spacing: 0.1em; }
+  .qcm-term { font-family: 'Amiri', serif; font-size: 1.35rem; font-weight: 700; color: var(--accent); }
+  .opt-btn {
+    width: 100%; padding: 12px 16px; border-radius: 12px;
+    background: var(--neutral-bg); border: 1px solid var(--neutral-border);
+    color: var(--neutral-text); cursor: pointer; text-align: right;
+    font-size: 0.84rem; line-height: 1.5; margin-bottom: 10px;
+    font-family: 'Cairo', sans-serif; transition: all 0.2s;
+  }
+  .opt-btn:not(.locked):hover { background: var(--surface-hover); border-color: var(--border-hover); }
+  .opt-btn.correct { background: var(--correct-bg); border-color: var(--correct-border); color: var(--correct-text); }
+  .opt-btn.wrong { background: var(--wrong-bg); border-color: var(--wrong-border); color: var(--wrong-text); }
+  .opt-btn.locked { cursor: default; }
+
+  /* ── REWRITE ── */
+  .rw-box { width: 100%; max-width: 480px; }
+  .rw-textarea {
+    width: 100%; min-height: 110px;
+    background: var(--input-bg); border: 1px solid var(--input-border);
+    border-radius: 12px; color: var(--text); font-family: 'Cairo', sans-serif;
+    font-size: 0.9rem; padding: 14px; resize: vertical; outline: none;
+    line-height: 1.6; direction: rtl; transition: border-color 0.2s;
+  }
+  .rw-textarea:focus { border-color: var(--accent); }
+  .rw-feedback { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-top: 14px; }
+  .feedback-label { font-size: 0.76rem; color: var(--text-sub); margin-bottom: 2px; }
+  .feedback-pct { font-size: 1.1rem; font-weight: 700; margin-bottom: 10px; }
+  .correct-def-label { font-size: 0.76rem; color: var(--text-sub); margin-bottom: 4px; }
+  .correct-def { font-size: 0.84rem; color: var(--text); line-height: 1.65; }
+
+  /* ── RESULTS ── */
+  .results-box { width: 100%; max-width: 480px; }
+  .results-summary { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 22px 20px; text-align: center; margin-bottom: 18px; }
+  .results-emoji { font-size: 2.2rem; margin-bottom: 6px; }
+  .results-label { font-size: 0.75rem; color: var(--text-sub); letter-spacing: 0.08em; margin-bottom: 2px; }
+  .results-score { font-size: 2rem; font-weight: 700; margin-bottom: 0; }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+  .results-overall-label { font-size: 0.75rem; color: var(--text-sub); letter-spacing: 0.08em; margin-bottom: 2px; }
+  .results-overall { font-size: 1.7rem; font-weight: 700; color: var(--accent); }
+  .results-mastered { font-size: 0.73rem; color: var(--text-sub); margin-top: 4px; }
+  .word-result { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 12px 16px; margin-bottom: 10px; }
+  .word-result-term { font-weight: 700; color: var(--accent); margin-bottom: 3px; font-family: 'Amiri', serif; }
+  .word-result-pct { font-size: 0.78rem; }
+  .word-correct-def { font-size: 0.76rem; color: var(--text-sub); line-height: 1.5; margin-top: 5px; }
+  .word-correct-def strong { color: var(--text-muted); }
+
+  .spinner {
+    width: 36px; height: 36px; border: 3px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin 0.8s linear infinite; margin: 40px auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<!-- ══ PAGE: LOADING ══ -->
+<div id="pg-loading" class="page active">
+  <div style="margin-top:40vh"><div class="spinner"></div></div>
+</div>
+
+<!-- ══ PAGE: AUTH ══ -->
+<div id="pg-auth" class="page">
+  <div class="auth-box">
+    <div class="auth-logo">
+      <div class="auth-logo-icon">📚</div>
+      <div class="auth-logo-title">بطاقات المراجعة</div>
+      <div class="auth-logo-sub">تاريخ وجغرافيا — الجزائر</div>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="switchTab('login')">تسجيل الدخول</button>
+      <button class="auth-tab" id="tab-signup" onclick="switchTab('signup')">إنشاء حساب</button>
+    </div>
+    <div id="auth-error" class="auth-error"></div>
+    <div id="auth-success" class="auth-success"></div>
+
+    <!-- Login Form -->
+    <div id="form-login">
+      <div class="form-group">
+        <label class="form-label">البريد الإلكتروني</label>
+        <input type="email" class="form-input" id="login-email" placeholder="example@email.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">كلمة المرور</label>
+        <input type="password" class="form-input" id="login-password" placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary" onclick="handleLogin()" id="login-btn">دخول ←</button>
+    </div>
+
+    <!-- Signup Form -->
+    <div id="form-signup" style="display:none">
+      <div class="form-group">
+        <label class="form-label">البريد الإلكتروني</label>
+        <input type="email" class="form-input" id="signup-email" placeholder="example@email.com">
+      </div>
+      <div class="form-group">
+        <label class="form-label">كلمة المرور</label>
+        <input type="password" class="form-input" id="signup-password" placeholder="••••••••">
+      </div>
+      <div class="form-group">
+        <label class="form-label">تأكيد كلمة المرور</label>
+        <input type="password" class="form-input" id="signup-password2" placeholder="••••••••">
+      </div>
+      <button class="btn btn-primary" onclick="handleSignup()" id="signup-btn">إنشاء حساب ←</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ PAGE: PENDING ══ -->
+<div id="pg-pending" class="page">
+  <div class="pending-box">
+    <div class="pending-icon">⏳</div>
+    <div class="pending-title">في انتظار التفعيل</div>
+    <div class="pending-desc">
+      تم تسجيل حسابك بنجاح.<br>
+      في انتظار موافقة المشرف للوصول إلى المحتوى.<br><br>
+      إذا حصلت على مفتاح وصول، أدخله أدناه للدخول الفوري.
+    </div>
+    <div id="pending-error" class="auth-error"></div>
+    <div id="pending-success" class="auth-success"></div>
+    <div class="key-input-wrap">
+      <label class="form-label">مفتاح الوصول</label>
+      <input type="text" class="form-input" id="access-key-input" placeholder="أدخل مفتاح الوصول هنا..." style="direction:ltr;text-align:center;letter-spacing:0.1em;">
+    </div>
+    <button class="btn btn-primary" onclick="submitAccessKey()" id="key-btn">تفعيل المفتاح 🔑</button>
+    <div class="key-divider">
+      <div class="key-divider-line"></div>
+      <div class="key-divider-text">أو</div>
+      <div class="key-divider-line"></div>
+    </div>
+    <button class="btn btn-secondary" onclick="handleLogout()" style="width:100%">تسجيل الخروج</button>
+  </div>
+</div>
+
+<!-- ══ PAGE: MENU ══ -->
+<div id="pg-menu" class="page">
+  <div class="user-bar">
+    <span class="user-email" id="user-email-display"></span>
+    <button class="logout-btn" onclick="handleLogout()">خروج ↩</button>
+  </div>
+  <div class="topbar">
+    <button class="theme-btn" onclick="toggleTheme()">☀️</button>
+    <div class="progress-pill">
+      <span>تقدمك الكلي</span>
+      <div class="pill" id="menu-overall-pill">0%</div>
+    </div>
+  </div>
+  <div class="subject-switcher">
+    <button class="subject-btn active" id="subj-hist" onclick="switchSubject('history')">📜 التاريخ</button>
+    <button class="subject-btn" id="subj-geo" onclick="switchSubject('geography')">🌍 الجغرافيا</button>
+  </div>
+  <div class="page-header">
+    <div class="page-title" id="menu-title">بطاقات المراجعة التاريخية</div>
+    <div class="page-subtitle" id="menu-subtitle">الجزائر — الحركة الوطنية</div>
+    <div class="page-badge" id="menu-group-badge">المجموعة الأولى</div>
+  </div>
+  <div id="hist-groups" style="width:100%;max-width:420px;">
+    <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+      <button id="grp-btn-1"   class="btn btn-primary" style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup(1)">الأولى</button>
+      <button id="grp-btn-2"   class="btn btn-ghost"   style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup(2)">الثانية</button>
+      <button id="grp-btn-3"   class="btn btn-ghost"   style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup(3)">الثالثة</button>
+      <button id="grp-btn-all" class="btn btn-ghost"   style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup('all')">الكل</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+      <button id="grp-btn-4"   class="btn btn-ghost"   style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup(4)">الرابعة</button>
+      <button id="grp-btn-5"   class="btn btn-ghost"   style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup(5)">الخامسة</button>
+      <button id="grp-btn-6"   class="btn btn-ghost"   style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchGroup(6)">السادسة</button>
+    </div>
+  </div>
+  <div id="geo-groups" style="width:100%;max-width:420px;display:none;">
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;" id="geo-group-btns"></div>
+  </div>
+  <div class="dash">
+    <div class="dash-top">
+      <div><div class="dash-label">تقدمك الكلي</div><div class="dash-big" id="dash-overall">0%</div></div>
+      <div style="text-align:left"><div class="dash-label">المصطلحات المتقنة</div><div class="dash-mastered" id="dash-mastered">0 <small id="dash-total">/ 10</small></div></div>
+    </div>
+    <div class="bar-wrap"><div class="bar-fill" id="dash-bar" style="width:0%"></div></div>
+    <div class="dots" id="dash-dots"></div>
+    <div class="dash-sessions" id="dash-sessions">ابدأ أول اختبار!</div>
+  </div>
+  <div class="mode-grid">
+    <div class="mode-card" onclick="showFlashcard()"><div class="mode-icon">🃏</div><div class="mode-title">بطاقات المراجعة</div><div class="mode-desc">تصفح المصطلحات — اضغط على البطاقة لتقليبها</div></div>
+    <div class="mode-card" onclick="startQCM()"><div class="mode-icon">☑️</div><div class="mode-title">اختبار QCM <span id="qcm-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">4 خيارات لكل مصطلح — اختر الإجابة الصحيحة</div></div>
+    <div class="mode-card" onclick="startRewrite()"><div class="mode-icon">✍️</div><div class="mode-title">اختبار الكتابة <span id="rw-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">اكتب التعريف بنفسك وستحصل على نسبة دقة</div></div>
+  </div>
+</div>
+
+<!-- ══ PAGE: FLASHCARD ══ -->
+<div id="pg-flashcard" class="page">
+  <div class="topbar"><button class="theme-btn" onclick="toggleTheme()">☀️🌙</button><div class="progress-pill"><span>تقدمك الكلي</span><div class="pill" id="fc-overall-pill">0%</div></div></div>
+  <div class="page-header"><div class="page-title">بطاقات المراجعة</div><div class="page-badge" id="fc-badge">المجموعة الأولى</div></div>
+  <div class="card-wrap">
+    <div class="card-inner" id="card-inner" onclick="flipCard()">
+      <div class="card-face card-front"><div class="card-term" id="fc-term"></div><div class="card-scores" id="fc-scores"></div><div class="card-hint">اضغط لرؤية التعريف ◀</div></div>
+      <div class="card-face card-back"><div class="card-def" id="fc-def"></div></div>
+    </div>
+  </div>
+  <div class="nav"><button class="btn btn-ghost" onclick="fcPrev()">◀</button><span style="font-size:0.8rem;color:var(--text-sub)" id="fc-counter">1 / 10</span><button class="btn btn-ghost" onclick="fcNext()">▶</button></div>
+  <div style="margin-top:14px"><button class="btn btn-secondary" onclick="goMenu()">← القائمة</button></div>
+</div>
+
+<!-- ══ PAGE: QCM ══ -->
+<div id="pg-qcm" class="page">
+  <div class="topbar"><button class="theme-btn" onclick="toggleTheme()">☀️🌙</button><div class="progress-pill"><span>تقدمك الكلي</span><div class="pill" id="qcm-overall-pill">0%</div></div></div>
+  <div class="page-header"><div class="page-title">اختبار QCM</div><div class="page-badge" id="qcm-badge">المجموعة الأولى</div></div>
+  <div class="qcm-box">
+    <div id="qcm-resume-bar" style="display:none;align-items:center;justify-content:space-between;background:var(--accent-dim);border:1px solid var(--accent-border);border-radius:12px;padding:10px 14px;margin-bottom:14px;gap:10px;">
+      <span style="font-size:0.8rem;color:var(--accent);">▶ متابعة من حيث توقفت</span>
+      <button class="btn btn-ghost" style="font-size:0.75rem;padding:5px 12px;" onclick="restartQCM()">بداية جديدة ↺</button>
+    </div>
+    <div class="qcm-term-box"><div class="qcm-label">ما تعريف هذا المصطلح؟</div><div class="qcm-term" id="qcm-term"></div></div>
+    <div id="qcm-opts"></div>
+    <div class="nav" id="qcm-nav" style="display:none"><button class="btn btn-primary" onclick="nextQCM()" id="qcm-next-btn">التالي ▶</button><span style="font-size:0.8rem;color:var(--text-sub)" id="qcm-counter">1 / 10</span></div>
+  </div>
+  <div style="margin-top:14px"><button class="btn btn-secondary" onclick="goMenu()">← القائمة</button></div>
+</div>
+
+<!-- ══ PAGE: REWRITE ══ -->
+<div id="pg-rewrite" class="page">
+  <div class="topbar"><button class="theme-btn" onclick="toggleTheme()">☀️🌙</button><div class="progress-pill"><span>تقدمك الكلي</span><div class="pill" id="rw-overall-pill">0%</div></div></div>
+  <div class="page-header"><div class="page-title">اختبار الكتابة</div><div class="page-badge" id="rw-badge">المجموعة الأولى</div></div>
+  <div class="rw-box">
+    <div id="rw-resume-bar" style="display:none;align-items:center;justify-content:space-between;background:var(--accent-dim);border:1px solid var(--accent-border);border-radius:12px;padding:10px 14px;margin-bottom:14px;gap:10px;">
+      <span style="font-size:0.8rem;color:var(--accent);">▶ متابعة من حيث توقفت</span>
+      <button class="btn btn-ghost" style="font-size:0.75rem;padding:5px 12px;" onclick="restartRW()">بداية جديدة ↺</button>
+    </div>
+    <div class="qcm-term-box"><div class="qcm-label">اكتب تعريف هذا المصطلح</div><div class="qcm-term" id="rw-term"></div></div>
+    <textarea class="rw-textarea" id="rw-input" placeholder="اكتب التعريف هنا..."></textarea>
+    <div class="nav" id="rw-submit-nav"><button class="btn btn-primary" onclick="submitRW()">تصحيح ✓</button><span style="font-size:0.8rem;color:var(--text-sub)" id="rw-counter">1 / 10</span></div>
+    <div id="rw-feedback" class="rw-feedback" style="display:none">
+      <div class="feedback-label">دقتك لهذا المصطلح</div>
+      <div class="bar-wrap"><div class="bar-fill" id="rw-bar"></div></div>
+      <div class="feedback-pct" id="rw-pct"></div>
+      <div class="correct-def-label">التعريف الصحيح:</div>
+      <div class="correct-def" id="rw-correct"></div>
+    </div>
+    <div class="nav" id="rw-next-nav" style="display:none"><button class="btn btn-primary" onclick="nextRW()">التالي ▶</button></div>
+  </div>
+  <div style="margin-top:14px"><button class="btn btn-secondary" onclick="goMenu()">← القائمة</button></div>
+</div>
+
+<!-- ══ PAGE: RESULTS ══ -->
+<div id="pg-results" class="page">
+  <div class="topbar"><button class="theme-btn" onclick="toggleTheme()">☀️🌙</button><div class="progress-pill"><span>تقدمك الكلي</span><div class="pill" id="res-overall-pill">0%</div></div></div>
+  <div class="page-header"><div class="page-title">النتائج</div><div class="page-badge" id="res-badge">المجموعة الأولى</div></div>
+  <div class="results-box">
+    <div class="results-summary">
+      <div class="results-emoji" id="res-emoji">🏆</div>
+      <div class="results-label">نتيجة هذا الاختبار</div>
+      <div class="results-score" id="res-score"></div>
+      <div class="bar-wrap"><div class="bar-fill" id="res-bar"></div></div>
+      <hr class="divider">
+      <div class="results-overall-label">تقدمك الكلي</div>
+      <div class="results-overall" id="res-overall"></div>
+      <div class="bar-wrap"><div class="bar-fill" id="res-overall-bar"></div></div>
+      <div class="results-mastered" id="res-mastered"></div>
+    </div>
+    <div id="res-words"></div>
+    <div class="nav"><button class="btn btn-primary" onclick="goMenu()">← القائمة</button><button class="btn btn-ghost" onclick="retryLast()">إعادة ↺</button></div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════
+//  SUPABASE INIT
+// ══════════════════════════════════════
+const SUPABASE_URL = 'https://fakoavxxabsatafwllxo.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ══════════════════════════════════════
+//  AUTH
+// ══════════════════════════════════════
+let currentUser = null;
+
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('pg-' + id).classList.add('active');
+}
+
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg; el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 4000);
+}
+function showSuccess(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg; el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 4000);
+}
+
+function switchTab(tab) {
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-signup').classList.toggle('active', tab === 'signup');
+  document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
+  document.getElementById('form-signup').style.display = tab === 'signup' ? 'block' : 'none';
+  document.getElementById('auth-error').style.display = 'none';
+  document.getElementById('auth-success').style.display = 'none';
+}
+
+async function handleLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  if (!email || !password) { showError('auth-error', 'يرجى إدخال البريد وكلمة المرور'); return; }
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = '...جاري التحقق';
+  const { data, error } = await db.auth.signInWithPassword({ email, password });
+  btn.disabled = false; btn.textContent = 'دخول ←';
+  if (error) { showError('auth-error', 'بيانات غير صحيحة، حاول مجدداً'); return; }
+  await checkUserAccess(data.user);
+}
+
+async function handleSignup() {
+  const email = document.getElementById('signup-email').value.trim();
+  const password = document.getElementById('signup-password').value;
+  const password2 = document.getElementById('signup-password2').value;
+  if (!email || !password) { showError('auth-error', 'يرجى ملء جميع الحقول'); return; }
+  if (password !== password2) { showError('auth-error', 'كلمتا المرور غير متطابقتين'); return; }
+  if (password.length < 6) { showError('auth-error', 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+  const btn = document.getElementById('signup-btn');
+  btn.disabled = true; btn.textContent = '...جاري الإنشاء';
+  const { data, error } = await db.auth.signUp({ email, password });
+  btn.disabled = false; btn.textContent = 'إنشاء حساب ←';
+  if (error) { showError('auth-error', 'حدث خطأ، جرب بريداً آخر'); return; }
+  // Create profile row
+  await db.from('profiles').insert({ email, is_approved: false });
+  showSuccess('auth-success', 'تم إنشاء الحساب! يمكنك تسجيل الدخول الآن');
+  switchTab('login');
+}
+
+async function checkUserAccess(user) {
+  currentUser = user;
+  const { data: profiles } = await db.from('profiles').select('*').eq('email', user.email);
+  const profile = profiles && profiles.length > 0 ? profiles[0] : null;
+  if (profile && profile.is_approved) {
+    const now = new Date();
+    const expiry = profile.expiry_date ? new Date(profile.expiry_date) : null;
+    if (expiry && expiry < now) {
+      showPage('expired');
+      return;
+    }
+    document.getElementById('user-email-display').textContent = user.email;
+    initApp();
+    showPage('menu');
+  } else {
+    showPage('pending');
+  }
+}
+
+async function submitAccessKey() {
+  const key = document.getElementById('access-key-input').value.trim();
+  if (!key) { showError('pending-error', 'يرجى إدخال المفتاح'); return; }
+  const btn = document.getElementById('key-btn');
+  btn.disabled = true; btn.textContent = '...جاري التحقق';
+
+  // Check key in access_keys table
+  const { data: keyData } = await db.from('access_keys').select('*').eq('key', key).eq('is_used', false).single();
+
+  if (!keyData) {
+    btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
+    showError('pending-error', 'المفتاح غير صحيح أو مستخدم مسبقاً');
+    return;
+  }
+
+  // Mark key as used
+  await db.from('access_keys').update({ is_used: true, used_by: currentUser.email }).eq('key', key);
+  // Approve user
+  await db.from('profiles').update({ is_approved: true, access_key: key }).eq('email', currentUser.email);
+
+  btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
+  showSuccess('pending-success', '✅ تم التفعيل! جاري الدخول...');
+  setTimeout(() => {
+    document.getElementById('user-email-display').textContent = currentUser.email;
+    initApp();
+    showPage('menu');
+  }, 1500);
+}
+
+async function handleLogout() {
+  await db.auth.signOut();
+  currentUser = null;
+  showPage('auth');
+}
+
+// ══════════════════════════════════════
+//  THEME
+// ══════════════════════════════════════
+function toggleTheme() {
+  const isLight = document.body.getAttribute('data-theme') === 'light';
+  document.body.setAttribute('data-theme', isLight ? '' : 'light');
+  document.querySelectorAll('.theme-btn').forEach(b => b.textContent = isLight ? '☀️' : '🌙');
+  try { localStorage.setItem('theme', isLight ? 'dark' : 'light'); } catch {}
+}
+(function() { try { if (localStorage.getItem('theme') === 'light') document.body.setAttribute('data-theme','light'); } catch {} })();
+
+// ══════════════════════════════════════
+//  DATA
+// ══════════════════════════════════════
+const HISTORY_WORDS = {
+  1: [
+    { id:1,  term:"المقاومة", def:"جهود الشعوب لمواجهة الاحتلال أو السيطرة الأجنبية، سواء بأساليب عسكرية أو سياسية، للحفاظ على الحرية والسيادة الوطنية." },
+    { id:2,  term:"تصفية الاستعمار", def:"إنهاء السيطرة السياسية والاقتصادية للدول الاستعمارية على المستعمرات، ومنح الشعوب استقلالها وحقها في تقرير مصيرها." },
+    { id:3,  term:"المد التحرري", def:"موجة تحرر شعبي أو وطني ضد القوى الاستعمارية، تشمل الثورات والحركات الشعبية لتحرير الأرض واستعادة السيادة الوطنية." },
+    { id:4,  term:"السيادة الوطنية", def:"حق الدولة في حكم نفسها واتخاذ قراراتها الداخلية والخارجية بحرية دون تدخل خارجي، وضمان استقلالها السياسي." },
+    { id:5,  term:"الأحزاب الوطنية", def:"تنظيمات سياسية ظهرت بالجزائر بعد الحرب العالمية الأولى حتى 1954، انقسمت إلى تيارات الاستقلال، الإصلاح، المساواة، والاندماج." },
+    { id:6,  term:"حركة الانتصار للحريات الديمقراطية", def:"حزب سياسي جزائري تأسس للمطالبة بالحريات وحقوق الشعب قبل الثورة، ولعب دورًا في التوعية والتحضير للتحرر الوطني." },
+    { id:7,  term:"المنظمة الخاصة", def:"فرع سري تابع لحركة الانتصار أسسه بعض الوطنيين لمواجهة الاستعمار بأساليب سرية وتنظيم شبكات المقاومة المسلحة." },
+    { id:8,  term:"اللجنة الثورية للوحدة والعمل", def:"هيئة تأسست لتوحيد جهود الوطنيين وتنظيم العمل السياسي والعسكري ضد الاستعمار قبل الثورة التحريرية." },
+    { id:9,  term:"التيار الثوري", def:"مجموعة داخل الحركة الوطنية تتبنى النهج المسلح ضد الاستعمار وتشجع على الثورة والتحرك المباشر لتحقيق الاستقلال." },
+    { id:10, term:"مجازر 8 ماي 1945", def:"أحداث دموية ارتكبتها قوات الاحتلال الفرنسي ضد الجزائريين في قالمة، خراطة، سطيف خلال مظاهرات سلمية، وأسفرت عن استشهاد أكثر من 45 ألف جزائري." },
+  ],
+  2: [
+    { id:11, term:"حرب التحرير الجزائرية", def:"الكفاح المسلح المنظم الذي خاضه الجزائريون ضد الاحتلال الفرنسي من 1954 إلى 1962 بهدف تحقيق الاستقلال الوطني والسيادة الكاملة." },
+    { id:12, term:"الثورة التحريرية", def:"ثورة شاملة للشعب الجزائري (1954–1962) ضد الاستعمار الفرنسي، اعتمدت الكفاح المسلح والسياسي بقيادة جبهة وجيش التحرير الوطني." },
+    { id:13, term:"بيان أول نوفمبر", def:"الوثيقة الرسمية التي أعلنت انطلاق الثورة التحريرية سنة 1954، ووضحت أهدافها الوطنية والسياسية وطرق كفاحها ضد الاستعمار." },
+    { id:14, term:"البيان", def:"النص الرسمي الصادر عن قيادة المقاومة، يحدد أهداف الثورة ومبادئها وخطط الكفاح المسلح والسياسي للشعب الجزائري." },
+    { id:15, term:"جبهة التحرير الوطني (FLN)", def:"الجناح السياسي للثورة الجزائرية، تأسست سنة 1954، نظمت الكفاح السياسي والدبلوماسي ووحدت القوى الوطنية لتحقيق الاستقلال." },
+    { id:16, term:"جيش التحرير الوطني (ALN)", def:"الجناح العسكري للثورة الجزائرية، تأسس سنة 1954، نفذ العمليات المسلحة ضد الاحتلال الفرنسي وحمى الشعب والمقاومة." },
+    { id:17, term:"تعبئة الجماهير", def:"إشراك الشعب الجزائري في الثورة، من خلال الدعم السياسي والمادي والمعنوي، والمشاركة في المقاومة السياسية والعسكرية." },
+    { id:18, term:"النشاط المسلح", def:"كل العمليات العسكرية التي نفذها الجزائريون ضد الجيش الفرنسي خلال الثورة، بما يشمل الكمائن والتفجيرات والمواجهات المباشرة." },
+  ],
+  3: [
+    { id:19, term:"حرب العصابات", def:"تكتيك عسكري اعتمده جيش التحرير الوطني يعتمد على الهجمات المفاجئة ضد القوات الفرنسية، مع الاستفادة من التضاريس المحلية." },
+    { id:20, term:"هجومات الشمال القسنطيني", def:"عمليات عسكرية كبرى قامت بها الثورة سنة 1955 في الشمال القسنطيني، أكدت شمولية واستمرارية الثورة ضد الاستعمار." },
+    { id:21, term:"معركة الجزائر", def:"عملية عسكرية كبرى (1956–1957) في العاصمة، أبرزت قوة الثورة وصمودها، وأكدت شرعية الكفاح الوطني للشعب الجزائري." },
+    { id:22, term:"مؤتمر الصومام (20 أوت 1956)", def:"اجتماع قادة الثورة في منطقة الصومام، وضعوا أسس التنظيم السياسي والعسكري للثورة وتحديد سلطات القيادة." },
+    { id:23, term:"المواثيق", def:"نصوص رسمية تحدد قواعد تنظيم الثورة، سلطات القيادة، توزيع المهام، وأسس إدارة الكفاح المسلح والسياسي." },
+    { id:24, term:"البرنامج", def:"خطة شاملة للثورة الجزائرية تحدد أهدافها، وسائل الكفاح وتوجيهات العمل السياسي والعسكري للوصول إلى الاستقلال." },
+    { id:25, term:"المجلس الوطني للثورة الجزائرية", def:"الهيئة التشريعية العليا للثورة، تتولى إصدار القرارات التنظيمية وتنسيق الكفاح السياسي والعسكري." },
+    { id:26, term:"لجنة التنسيق والتنفيذ", def:"جهاز تكميلي للمجلس الوطني، مكلف بتنفيذ القرارات وتنظيم العمليات العسكرية والسياسية على أرض الواقع." },
+    { id:27, term:"الحكومة الجزائرية المؤقتة (GPRA)", def:"جهاز سياسي تأسس بالقاهرة في 19 سبتمبر 1958 برئاسة فرحات عباس، مثّل الثورة الجزائرية دولياً." },
+    { id:28, term:"مؤتمر طرابلس (1962)", def:"اجتماع قادة الثورة قبل الاستقلال لتحديد اختيارات الدولة الجزائرية المستقلة وضمان انتقال السلطة." },
+    { id:29, term:"تطويق الثورة", def:"محاصرة الثورة ومنعها من التوسع والانتشار وعزلها عن الدعم الشعبي والخارجي." },
+  ],
+  4: [
+    { id:30, term:"سياسة القمع", def:"الإجراءات العنيفة التي اتبعتها فرنسا لقمع الثورة، تشمل الاعتقالات والإعدامات والتعذيب والمحتشدات." },
+    { id:31, term:"سياسة الإغراء", def:"محاولات فرنسا استمالة بعض الجزائريين بالامتيازات والمناصب لتقليل دعم الثورة وإضعاف جبهة التحرير الوطني." },
+    { id:32, term:"مشروع سوستال", def:"خطة أطلقها الحاكم العام الفرنسي جاك سوستال لتقديم امتيازات اقتصادية واجتماعية محدودة لإغراء السكان واحتواء الثورة." },
+    { id:33, term:"مشروع قسنطينة", def:"برنامج أعلنه الرئيس الفرنسي شارل ديغول 1958، يهدف لإغراء الجزائريين بالامتيازات الاقتصادية والاجتماعية." },
+    { id:34, term:"القوة الثالثة", def:"طبقة جزائرية موالية للاستعمار، استفادت من امتيازات الاحتلال الفرنسي، وعارضت الثورة للحفاظ على مصالحها." },
+    { id:35, term:"المكاتب العربية", def:"أجهزة فرنسية أنشئت لتجنيد معلومات عن السكان ومراقبة الأنشطة الوطنية، بهدف دعم قمع الثورة." },
+    { id:36, term:"الفرق الإدارية المتخصصة (SAS)", def:"وحدات فرنسية متخصصة في جمع المعلومات الأمنية ومراقبة الأهالي وملاحقة عناصر المقاومة." },
+    { id:37, term:"المحتشدات", def:"معتقلات أنشأتها السلطات الفرنسية لإجبار السكان على التجمع لعزلهم عن الثورة وقطع الدعم عن جيش التحرير." },
+    { id:38, term:"المناطق المحرمة", def:"أراضٍ أعلنتها فرنسا مناطق عسكرية مغلقة لمنع السكان من دخولها وقطع طرق الإمداد عن المقاومة." },
+    { id:39, term:"الاستراتيجية الديغولية", def:"خطة الرئيس الفرنسي شارل ديغول لمواجهة الثورة، تجمع بين القمع العسكري وسياسة الإغراء." },
+  ],
+  5: [
+    { id:40, term:"خط شال وموريس", def:"أسلاك شائكة ومكهربة على الحدود الشرقية والغربية للجزائر، أقامتها فرنسا لمنع وصول الإمدادات والأسلحة للثوار." },
+    { id:41, term:"مخطط شال", def:"خطط عسكرية وضعها الجنرال شال سنة 1959، اعتمدت على التمشيط البري والجوي والبحري لتعقب المجاهدين." },
+    { id:42, term:"القرصنة الجوية", def:"اختطاف طائرة قادة الوفد الجزائري في الخارج، ضمن محاولات فرنسا تعطيل الدبلوماسية الثورية." },
+    { id:43, term:"منظمة الجيش الفرنسي (OAS)", def:"حركة مسلحة فرنسية أنشئت لمعارضة استقلال الجزائر، نفذت عمليات عنف وتفجيرات لإرهاب الجزائريين." },
+    { id:44, term:"سلم الشجعان", def:"نداء وجهه الرئيس الفرنسي شارل ديغول للثوار الجزائريين، يحثهم على الانفصال عن الثورة مقابل امتيازات وحوافز." },
+    { id:45, term:"الدبلوماسية الجزائرية", def:"جهود الثورة الجزائرية في الخارج لكسب دعم الدول والمنظمات الدولية والترويج لقضية الاستقلال." },
+    { id:46, term:"الدبلوماسية الفرنسية", def:"جهود فرنسا في الخارج لتوضيح موقفها وكسب دعم الدول وعرقلة الاعتراف الدولي بالثورة الجزائرية." },
+    { id:47, term:"السند الدبلوماسي", def:"الوثائق والمواقف الرسمية التي تستخدمها الدول لدعم موقفها في المحافل الدولية." },
+    { id:48, term:"تدويل القضية الجزائرية", def:"تعريف القضية الجزائرية على المستوى الدولي لكسب الدعم والاعتراف بالثورة من الدول والمنظمات." },
+    { id:49, term:"المحافل الدولية", def:"الهيئات والمنابر الرسمية التي يجتمع فيها ممثلو الدول لمناقشة القضايا العالمية، مثل الأمم المتحدة." },
+  ],
+  6: [
+    { id:50, term:"المفاوضات", def:"محادثات رسمية بين الطرفين الجزائري والفرنسي للتوصل إلى حلول سلمية وإنهاء النزاع، مثل مفاوضات إيفيان 1962." },
+    { id:51, term:"الهدنة", def:"وقف مؤقت للعمليات العسكرية خلال مرحلة التفاوض، رفضه الوفد الجزائري وطالب بوقف إطلاق النار بعد المفاوضات." },
+    { id:52, term:"وقف إطلاق النار", def:"إيقاف كامل للعمليات العسكرية بين جيش التحرير الوطني والجيش الفرنسي يوم 19 مارس 1962." },
+    { id:53, term:"اتفاقية إيفيان", def:"الاتفاق النهائي الموقع 18 مارس 1962 بين الجزائر وفرنسا، أنهى حرب التحرير وأكد استقلال الجزائر." },
+    { id:54, term:"الهيئة التنفيذية المؤقتة", def:"سلطة جزائرية مؤقتة تهدف لإدارة المرحلة الانتقالية بعد اتفاقية إيفيان، برئاسة عبد الرحمن فارس." },
+    { id:55, term:"الاستفتاء", def:"تصويت شعبي شارك فيه الجزائريون لتقرير مصير بلدهم، أجري بعد اتفاقية إيفيان، وأكد دعم الشعب للاستقلال." },
+    { id:56, term:"الثورة الزراعية", def:"سياسات حكومية لتطوير الزراعة بعد الاستقلال، تهدف إلى زيادة الإنتاج وتحسين مستوى المعيشة في المناطق الريفية." },
+    { id:57, term:"الثورة الصناعية", def:"جهود الدولة لإنشاء الصناعات الوطنية بعد الاستقلال وتقليل الاعتماد على المنتجات المستوردة." },
+    { id:58, term:"الثورة الثقافية", def:"سياسات لتطوير التعليم والثقافة بعد الاستقلال وتعزيز الهوية الوطنية واللغة العربية." },
+    { id:59, term:"المخططات الإنمائية", def:"برامج وخطط وضعتها الدولة بعد الاستقلال لتنمية مختلف القطاعات الاقتصادية والاجتماعية." },
+    { id:60, term:"التأميمات", def:"إجراءات اتخذتها الدولة بعد الاستقلال لاسترجاع سيادتها على الممتلكات والشركات الكبرى من القطاع الخاص إلى العام." },
+  ],
+};
+
+const GEO_TERMS_RAW = [
+  { term:"العملة الصعبة", def:"عملات أجنبية قوية تستخدم في التجارة الدولية، مثل الدولار واليورو، وتتميز بالاستقرار والهيمنة على التجارة الدولية." },
+  { term:"المحاصيل النقدية", def:"محاصيل زراعية تزرع بهدف البيع في الأسواق أو التصدير لتحقيق أرباح مالية، وليس للاستهلاك المحلي فقط." },
+  { term:"المواد الأولية الطاقوية", def:"مصادر طبيعية كالنفط والفحم والغاز تستخدم لإنتاج الطاقة وتشغيل المصانع والمواصلات." },
+  { term:"البرميل", def:"وحدة قياس تستعمل في التجارة البترولية وتقدر سعتها بحوالي 158.97 لتر." },
+  { term:"الصناعة التحويلية", def:"نشاط صناعي يحول المواد الخام إلى منتجات نهائية قابلة للاستهلاك أو التصدير." },
+  { term:"الصناعة الاستخراجية", def:"نشاط اقتصادي يركز على استخراج الموارد الطبيعية مثل المعادن والنفط والفحم من الأرض." },
+  { term:"الميزان التجاري", def:"الفرق بين قيمة الصادرات والواردات لدولة ما خلال سنة، قد يسجل ربحًا أو عجزًا." },
+  { term:"ميزان المدفوعات", def:"سجل سنوي يبين القيم النقدية للمعاملات التجارية والمالية بين دولة وبقية العالم." },
+  { term:"الخدمات", def:"أنشطة اقتصادية غير مادية مثل التعليم والصحة والنقل والسياحة، تساهم في نمو الاقتصاد." },
+  { term:"المبادلات التجارية", def:"تبادل السلع والخدمات بين دولتين أو أكثر عبر الأسواق العالمية، وتشمل الصادرات والواردات." },
+  { term:"الأسواق العالمية", def:"الفضاءات المخصصة لتداول جميع السلع وعقد الصفقات التجارية بين دول العالم." },
+  { term:"الحواجز الجمركية", def:"قيود تفرضها الدول على استيراد أو تصدير السلع لحماية الإنتاج المحلي أو تنظيم التجارة." },
+  { term:"المناطق الحرة", def:"مناطق معفاة من القيود الجمركية والضرائب لتشجيع الاستثمار وجذب الشركات الأجنبية." },
+  { term:"التقسيم الدولي للعمل", def:"توزيع النشاطات الاقتصادية بين الدول وفق قدراتها وإمكانياتها." },
+  { term:"مجموعة الثمانية (G8)", def:"تجمع اقتصادي وسياسي لدول صناعية كبرى لمناقشة القضايا الاقتصادية العالمية." },
+  { term:"البريكس (BRICS)", def:"مجموعة اقتصادية تضم البرازيل، روسيا، الهند، الصين، جنوب أفريقيا، تهدف لتعزيز التعاون الاقتصادي والسياسي." },
+  { term:"البلدان الصاعدة", def:"دول تنتمي للعالم الثالث نجحت في تحقيق تطور في نموها الاقتصادي بسبب التطور الصناعي، مثل الصين والهند والبرازيل." },
+  { term:"الأوبك (OPEC)", def:"منظمة الدول المصدرة للبترول، تعمل على تنظيم إنتاج النفط والأسعار لضمان مصالح الدول الأعضاء." },
+  { term:"الثالوث الاقتصادي", def:"مجموعة الدول الصناعية الكبرى الثلاث: الولايات المتحدة، اليابان، والاتحاد الأوروبي." },
+  { term:"التكتلات الاقتصادية", def:"تحالفات بين مجموعة دول لتسهيل التجارة والتعاون الاقتصادي بينها، مثل الاتحاد الأوروبي." },
+  { term:"اقتصاد السوق الحر", def:"نظام اقتصادي يعتمد على المبادرة الفردية وتحرير الأسواق، حيث تحدد الأسعار وفق قانون العرض والطلب." },
+  { term:"الاقتصاد الموجه", def:"نظام اقتصادي تتحكم فيه الدولة في الإنتاج والتوزيع والأسعار وتخطط للموارد." },
+  { term:"الخوصصة", def:"نقل ملكية أو إدارة شركات أو مؤسسات من القطاع العام إلى الخاص بغية زيادة الكفاءة وتحفيز الاستثمار." },
+  { term:"القطاع العام", def:"مؤسسات وشركات تملكها الدولة وتديرها لتوفير الخدمات الأساسية وتنفيذ السياسات الاقتصادية." },
+  { term:"التنمية", def:"مجموع القرارات والإجراءات والمشاريع التي تهدف إلى الاستغلال الأمثل للإمكانات لتحقيق التطور الاقتصادي والرفاهية الاجتماعية." },
+  { term:"التقدم", def:"حالة تحسن وتطور الدولة أو المجتمع في مجالات الاقتصاد والتعليم والتكنولوجيا والثقافة." },
+  { term:"التخلف", def:"حالة ضعف الدولة أو المجتمع في مواكبة الدول المتقدمة اقتصادياً واجتماعياً وثقافياً وتكنولوجياً." },
+  { term:"الدول النامية", def:"الدول التي استقلت حديثاً وتعرف نمواً اقتصادياً بطيئاً، وتتواجد معظمها في أفريقيا وآسيا وأمريكا اللاتينية." },
+  { term:"النمو الاقتصادي", def:"زيادة إنتاج الدولة من السلع والخدمات وتحسن الناتج المحلي مما يعكس تقدم النشاط الاقتصادي." },
+  { term:"التوازن الاقتصادي", def:"استقرار الاقتصاد بحيث تتساوى الموارد مع الاحتياجات وتتحقق العدالة في توزيع الثروة." },
+  { term:"الاكتفاء الذاتي", def:"قدرة الدولة على إنتاج حاجاتها من الغذاء والموارد الأساسية داخلياً بحيث تقل اعتمادها على الاستيراد." },
+  { term:"الأمن الغذائي", def:"ضمان توفر الغذاء الكافي لجميع السكان بشكل دائم لضمان التغذية واستقرار المجتمع." },
+  { term:"السلاح الأخضر", def:"استخدام الدول المنتجة للغذاء مواردها الزراعية كسلاح سياسي للضغط على الدول المستوردة." },
+  { term:"مؤشر التنمية البشرية", def:"مقياس دولي يجمع بين متوسط العمر المتوقع ومستوى التعليم والدخل الفردي لتقييم مستوى تطور الدول." },
+  { term:"السندات", def:"أوراق مالية تصدرها الدولة أو الشركات للاقتراض من المستثمرين مع التزام بالسداد مع فائدة." },
+  { term:"الأسهم", def:"حصص ملكية في شركة تمنح حاملها حق الاستفادة من أرباحها وحضور قراراتها." },
+  { term:"البورصة", def:"سوق مالية منظمة يتم فيها تداول الأسهم والسندات والأوراق المالية بين المستثمرين." },
+  { term:"المضاربة", def:"شراء الأصول بهدف إعادة بيعها بسعر أعلى في المستقبل القريب مع قبول مخاطر مرتفعة." },
+  { term:"التضخم", def:"الارتفاع المستمر في أسعار السلع والخدمات مما يؤدي إلى تراجع القوة الشرائية للعملة." },
+  { term:"القروض", def:"مبالغ مالية تمنحها البنوك أو المؤسسات المالية للأفراد أو الدول مع التزام بالسداد مع فوائد." },
+  { term:"المديونية", def:"تراكم الديون على دولة أو مؤسسة نتيجة الاقتراض المتكرر وصعوبة السداد." },
+  { term:"المؤسسات المالية العالمية", def:"هيئات دولية كصندوق النقد والبنك الدولي تعمل على تنظيم الاقتصاد العالمي وتقديم الدعم المالي للدول." },
+  { term:"صندوق النقد الدولي", def:"منظمة دولية تأسست 1944 تهدف لتعزيز الاستقرار النقدي الدولي وتقديم قروض للدول التي تعاني من أزمات." },
+  { term:"البنك العالمي للإنشاء والتعمير", def:"مؤسسة دولية تأسست 1944 تقدم قروضاً وخبرات فنية للدول النامية لدعم مشاريع التنمية." },
+  { term:"العملة", def:"وسيلة التبادل الرسمية المعتمدة في دولة ما لتسهيل المعاملات الاقتصادية." },
+  { term:"الناتج الداخلي الخام (GDP)", def:"مجموع قيمة السلع والخدمات المنتجة داخل حدود دولة ما خلال سنة بصرف النظر عن جنسية المنتجين." },
+  { term:"الناتج الوطني الخام (GNP)", def:"مجموع قيمة السلع والخدمات التي ينتجها مواطنو دولة ما في الداخل والخارج خلال سنة." },
+  { term:"الدخل الفردي", def:"متوسط نصيب الفرد من الناتج الوطني، يستخدم مقياساً لمستوى المعيشة في الدولة." },
+  { term:"المعيار", def:"مستوى مرجعي أو قياسي يُستخدم للمقارنة وتقييم الأداء الاقتصادي أو الاجتماعي." },
+  { term:"المؤشر", def:"رقم أو نسبة تستخدم لقياس ظاهرة اقتصادية أو اجتماعية ومتابعة تطورها عبر الزمن." },
+  { term:"رؤوس الأموال", def:"الأموال والأصول المستثمرة في نشاط اقتصادي بهدف تحقيق عائد أو ربح." },
+  { term:"تبييض الأموال", def:"عملية غير مشروعة تهدف إلى إخفاء المصدر غير القانوني للأموال وإدخالها في الدورة الاقتصادية الرسمية." },
+  { term:"الاستثمار", def:"توظيف رأس المال في مشاريع أو أصول بهدف تحقيق عائد مالي مستقبلي." },
+  { term:"البنوك", def:"مؤسسات مالية تتلقى الودائع وتمنح القروض وتقدم خدمات مالية متنوعة للأفراد والشركات." },
+  { term:"الفوائد", def:"مبلغ إضافي يُدفع مقابل استخدام المال المقترض، أو يُكتسب مقابل إيداعه في البنك." },
+  { term:"القطاع الخاص", def:"مجموع الشركات والمؤسسات التي يملكها ويديرها أفراد أو مجموعات خاصة بهدف تحقيق الربح." },
+  { term:"العولمة", def:"ظاهرة تزايد الترابط والاندماج الاقتصادي والثقافي والسياسي بين دول العالم نتيجة تطور التجارة والتكنولوجيا." },
+  { term:"الشركات", def:"كيانات قانونية تجمع رؤوس أموال وموارد بشرية لممارسة نشاط اقتصادي بهدف تحقيق الربح." },
+  { term:"الشركات متعددة الجنسيات", def:"شركات كبرى تمارس نشاطها في عدة دول في آن واحد وتمتلك فروعاً وإنتاجاً موزعاً عبر العالم." },
+  { term:"الشركات الاحتكارية", def:"شركات تسيطر على جزء كبير من السوق وتملك قدرة التحكم في الأسعار بسبب غياب المنافسة الفعلية." },
+  { term:"الإعلام", def:"منظومة وسائل نقل المعلومات والأفكار للجمهور، تؤدي دوراً محورياً في توجيه الرأي العام والتأثير على الاقتصاد." },
+  { term:"الإشهار والدعاية", def:"أدوات تسويقية تهدف إلى الترويج للمنتجات والخدمات وإقناع المستهلكين بشرائها." },
+  { term:"التكنولوجيا", def:"مجموع الأدوات والتقنيات والمعارف التطبيقية المستخدمة في الإنتاج وتحسين الكفاءة الاقتصادية." },
+];
+
+const GEO_GROUP_SIZE = 10;
+const GEO_NUM_GROUPS = Math.ceil(GEO_TERMS_RAW.length / GEO_GROUP_SIZE);
+const GEO_ALL_WORDS = {};
+for (let g = 1; g <= GEO_NUM_GROUPS; g++) {
+  const start = (g-1)*GEO_GROUP_SIZE;
+  GEO_ALL_WORDS[g] = GEO_TERMS_RAW.slice(start, start+GEO_GROUP_SIZE).map((t,i) => ({ id: 1000+start+i+1, term: t.term, def: t.def }));
+}
+
+// ══════════════════════════════════════
+//  APP STATE
+// ══════════════════════════════════════
+let currentSubject = 'history';
+let currentGroup = 1;
+let ALL_WORDS = HISTORY_WORDS;
+let WORDS = ALL_WORDS[1];
+let progress = { scores: {}, sessions: 0 };
+let fcIdx = 0;
+let qcmQuestions = [], qcmIdx = 0, qcmSelected = false, qcmAnswers = [];
+let rwQuestions = [], rwIdx = 0, rwAnswers = [];
+let lastMode = 'qcm';
+
+function initApp() {
+  ALL_WORDS = HISTORY_WORDS;
+  currentSubject = 'history';
+  currentGroup = 1;
+  WORDS = ALL_WORDS[1];
+  loadAndRefresh();
+}
+
+// ══════════════════════════════════════
+//  SUBJECT & GROUP
+// ══════════════════════════════════════
+async function switchSubject(subj) {
+  currentSubject = subj;
+  document.getElementById('subj-hist').classList.toggle('active', subj === 'history');
+  document.getElementById('subj-geo').classList.toggle('active', subj === 'geography');
+  document.getElementById('hist-groups').style.display = subj === 'history' ? 'block' : 'none';
+  document.getElementById('geo-groups').style.display = subj === 'geography' ? 'block' : 'none';
+  if (subj === 'history') {
+    ALL_WORDS = HISTORY_WORDS;
+    document.getElementById('menu-title').textContent = 'بطاقات المراجعة التاريخية';
+    document.getElementById('menu-subtitle').textContent = 'الجزائر — الحركة الوطنية';
+    currentGroup = 1; WORDS = ALL_WORDS[1]; updateHistGroupBtns(1);
+  } else {
+    ALL_WORDS = GEO_ALL_WORDS;
+    document.getElementById('menu-title').textContent = 'بطاقات الجغرافيا';
+    document.getElementById('menu-subtitle').textContent = `${GEO_TERMS_RAW.length} مصطلحاً جغرافياً واقتصادياً`;
+    buildGeoGroupBtns(); currentGroup = 1; WORDS = ALL_WORDS[1]; selectGeoGroup(1); return;
+  }
+  await loadAndRefresh();
+}
+
+function buildGeoGroupBtns() {
+  const container = document.getElementById('geo-group-btns');
+  container.innerHTML = '';
+  const names = ['الأولى','الثانية','الثالثة','الرابعة','الخامسة','السادسة','السابعة'];
+  for (let g = 1; g <= GEO_NUM_GROUPS; g++) {
+    const btn = document.createElement('button');
+    btn.id = `geo-grp-${g}`; btn.className = g === 1 ? 'btn btn-primary' : 'btn btn-ghost';
+    btn.style.cssText = 'flex:1;font-size:0.75rem;padding:8px 4px;';
+    btn.textContent = names[g-1] || `المجموعة ${g}`; btn.onclick = () => selectGeoGroup(g);
+    container.appendChild(btn);
+  }
+  const allBtn = document.createElement('button');
+  allBtn.id = 'geo-grp-all'; allBtn.className = 'btn btn-ghost';
+  allBtn.style.cssText = 'flex:1;font-size:0.75rem;padding:8px 4px;';
+  allBtn.textContent = 'الكل'; allBtn.onclick = () => selectGeoGroup('all');
+  container.appendChild(allBtn);
+}
+
+async function selectGeoGroup(g) {
+  currentGroup = g;
+  WORDS = g === 'all' ? Object.values(GEO_ALL_WORDS).flat() : GEO_ALL_WORDS[g] || [];
+  document.querySelectorAll('[id^="geo-grp-"]').forEach(b => b.className = 'btn btn-ghost');
+  const ab = document.getElementById(g === 'all' ? 'geo-grp-all' : `geo-grp-${g}`);
+  if (ab) ab.className = 'btn btn-primary';
+  await loadAndRefresh();
+}
+
+function updateHistGroupBtns(g) {
+  ['1','2','3','4','5','6','all'].forEach(n => {
+    const b = document.getElementById('grp-btn-'+n);
+    if (!b) return;
+    const key = n === 'all' ? 'all' : parseInt(n);
+    b.className = key === g ? 'btn btn-primary' : 'btn btn-ghost';
+    b.style.cssText = 'flex:1;font-size:0.75rem;padding:8px 4px;';
+  });
+}
+
+async function switchGroup(g) {
+  currentGroup = g;
+  WORDS = g === 'all' ? Object.values(HISTORY_WORDS).flat() : HISTORY_WORDS[g];
+  updateHistGroupBtns(g); await loadAndRefresh();
+}
+
+function updateGroupBadge() {
+  let label;
+  if (currentSubject === 'history') {
+    const names = { 1:'المجموعة الأولى',2:'المجموعة الثانية',3:'المجموعة الثالثة',4:'المجموعة الرابعة',5:'المجموعة الخامسة',6:'المجموعة السادسة',all:'الكل' };
+    label = names[currentGroup] || 'الكل';
+  } else {
+    label = currentGroup === 'all' ? `الكل — ${GEO_TERMS_RAW.length} مصطلح` : `المجموعة ${currentGroup}`;
+  }
+  document.querySelectorAll('.page-badge').forEach(el => el.textContent = label);
+  const mb = document.getElementById('menu-group-badge');
+  if (mb) mb.textContent = label;
+}
+
+// ══════════════════════════════════════
+//  STORAGE (localStorage per user)
+// ══════════════════════════════════════
+function getStorageKey() { return `fc-${currentUser?.id}-${currentSubject}-g${currentGroup}`; }
+function getDraftKey(mode) { return getStorageKey()+'-draft-'+mode; }
+
+async function loadAndRefresh() {
+  progress = JSON.parse(localStorage.getItem(getStorageKey()) || '{"scores":{},"sessions":0}');
+  WORDS.forEach(w => { if (!progress.scores[w.id]) progress.scores[w.id] = { qcm: null, rewrite: null }; });
+  updateGroupBadge(); refreshDash();
+}
+
+function saveProgress() { localStorage.setItem(getStorageKey(), JSON.stringify(progress)); }
+function saveDraft(mode, data) { localStorage.setItem(getDraftKey(mode), JSON.stringify(data)); }
+function loadDraft(mode) { try { return JSON.parse(localStorage.getItem(getDraftKey(mode))); } catch { return null; } }
+function clearDraft(mode) { localStorage.removeItem(getDraftKey(mode)); }
+
+// ══════════════════════════════════════
+//  DASHBOARD
+// ══════════════════════════════════════
+function calcOverall() {
+  let total = 0, count = 0;
+  WORDS.forEach(w => {
+    const s = progress.scores[w.id];
+    if (!s) return;
+    if (s.qcm !== null) { total += s.qcm; count++; }
+    if (s.rewrite !== null) { total += s.rewrite; count++; }
+  });
+  return count ? Math.round(total/count) : 0;
+}
+function calcMastered() {
+  return WORDS.filter(w => {
+    const s = progress.scores[w.id];
+    if (!s) return false;
+    const scores = [s.qcm, s.rewrite].filter(x => x !== null);
+    return scores.length > 0 && scores.reduce((a,b)=>a+b,0)/scores.length >= 70;
+  }).length;
+}
+function barColor(v) { return v >= 70 ? '#4aaa70' : v >= 40 ? '#c9a84c' : '#aa4a4a'; }
+function setBar(id, v) { const el = document.getElementById(id); if (!el) return; el.style.width = v+'%'; el.style.background = barColor(v); }
+function updatePills(overall) { document.querySelectorAll('.pill').forEach(p => p.textContent = overall+'%'); }
+
+function refreshDash() {
+  const overall = calcOverall(), mastered = calcMastered();
+  document.getElementById('dash-overall').textContent = overall+'%';
+  document.getElementById('dash-mastered').innerHTML = mastered+' <small>/ '+WORDS.length+'</small>';
+  setBar('dash-bar', overall); updatePills(overall);
+  const dots = document.getElementById('dash-dots'); dots.innerHTML = '';
+  WORDS.forEach(w => {
+    const s = progress.scores[w.id]; let color = 'var(--track)';
+    if (s) { const sc = [s.qcm,s.rewrite].filter(x=>x!==null); if (sc.length) color = barColor(sc.reduce((a,b)=>a+b,0)/sc.length); }
+    const d = document.createElement('div'); d.className = 'dot'; d.title = w.term; d.style.background = color; dots.appendChild(d);
+  });
+  document.getElementById('dash-sessions').textContent = (progress.sessions||0) ? `${progress.sessions} جلسة مكتملة` : 'ابدأ أول اختبار!';
+  const qd = loadDraft('qcm');
+  document.getElementById('qcm-draft-badge').style.display = (qd?.answers?.length > 0 && qd.answers.length < qd.questions?.length) ? 'inline' : 'none';
+  const rd = loadDraft('rewrite');
+  document.getElementById('rw-draft-badge').style.display = (rd?.answers?.length > 0 && rd.answers.length < rd.questions?.length) ? 'inline' : 'none';
+}
+
+// ══════════════════════════════════════
+//  FLASHCARD
+// ══════════════════════════════════════
+function showFlashcard() { fcIdx = 0; renderFC(); showPage('flashcard'); }
+function renderFC() {
+  const w = WORDS[fcIdx];
+  document.getElementById('fc-term').textContent = w.term;
+  document.getElementById('fc-def').textContent = w.def;
+  document.getElementById('fc-counter').textContent = (fcIdx+1)+' / '+WORDS.length;
+  const s = progress.scores[w.id]; const sc = document.getElementById('fc-scores'); sc.innerHTML = '';
+  if (s) { if (s.qcm!==null) sc.innerHTML+=`<span class="score-tag">QCM: ${s.qcm}%</span>`; if (s.rewrite!==null) sc.innerHTML+=`<span class="score-tag">كتابة: ${s.rewrite}%</span>`; }
+  document.getElementById('card-inner').classList.remove('flipped');
+}
+function flipCard() { document.getElementById('card-inner').classList.toggle('flipped'); }
+function fcNext() { if (fcIdx < WORDS.length-1) { fcIdx++; renderFC(); } }
+function fcPrev() { if (fcIdx > 0) { fcIdx--; renderFC(); } }
+function goMenu() { showPage('menu'); refreshDash(); }
+
+// ══════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════
+function shuffle(arr) { const a=[...arr]; for (let i=a.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]; } return a; }
+function genOptions(word) { return shuffle([word, ...shuffle(WORDS.filter(w=>w.id!==word.id)).slice(0,3)]); }
+function similarity(a, b) {
+  const n = s => s.trim().replace(/[\u0610-\u061A\u064B-\u065F]/g,'').replace(/أ|إ|آ/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي').toLowerCase();
+  const na=n(a), nb=n(b); if (na===nb) return 100;
+  const wa=na.split(/\s+/), wb=nb.split(/\s+/);
+  return Math.round((wa.filter(w=>wb.includes(w)).length / Math.max(wa.length,wb.length))*100);
+}
+
+// ══════════════════════════════════════
+//  QCM
+// ══════════════════════════════════════
+function startQCM() {
+  lastMode = 'qcm';
+  const draft = loadDraft('qcm');
+  const wordMap = Object.fromEntries(WORDS.map(w=>[w.id,w]));
+  if (draft?.questions?.length && draft.answers?.length > 0 && draft.answers.length < draft.questions.length && draft.questions.every(id=>wordMap[id])) {
+    qcmQuestions = draft.questions.map(id=>({ word:wordMap[id], opts:genOptions(wordMap[id]) }));
+    qcmIdx = draft.answers.length;
+    qcmAnswers = draft.answers.map(a=>({ word:wordMap[a.wordId], correct:a.correct }));
+    qcmSelected = false;
+    document.getElementById('qcm-resume-bar').style.display = 'flex';
+    showPage('qcm'); renderQCM(); return;
+  }
+  qcmQuestions = shuffle(WORDS).map(w=>({ word:w, opts:genOptions(w) }));
+  qcmIdx=0; qcmSelected=false; qcmAnswers=[];
+  document.getElementById('qcm-resume-bar').style.display = 'none';
+  saveDraft('qcm', { questions:qcmQuestions.map(q=>q.word.id), answers:[] });
+  showPage('qcm'); renderQCM();
+}
+function renderQCM() {
+  const q = qcmQuestions[qcmIdx];
+  document.getElementById('qcm-term').textContent = q.word.term;
+  document.getElementById('qcm-counter').textContent = (qcmIdx+1)+' / '+qcmQuestions.length;
+  document.getElementById('qcm-nav').style.display = 'none';
+  const opts = document.getElementById('qcm-opts'); opts.innerHTML = '';
+  q.opts.forEach(opt => {
+    const btn = document.createElement('button'); btn.className = 'opt-btn'; btn.textContent = opt.def;
+    btn.onclick = () => selectQCM(btn, opt, q.word); opts.appendChild(btn);
+  }); qcmSelected = false;
+}
+function selectQCM(btn, opt, word) {
+  if (qcmSelected) return; qcmSelected = true;
+  const isCorrect = opt.id === word.id;
+  document.querySelectorAll('.opt-btn').forEach(b => { b.classList.add('locked'); if (b.textContent === word.def) b.classList.add('correct'); });
+  if (!isCorrect) btn.classList.add('wrong');
+  qcmAnswers.push({ word, correct:isCorrect });
+  saveDraft('qcm', { questions:qcmQuestions.map(q=>q.word.id), answers:qcmAnswers.map(a=>({ wordId:a.word.id, correct:a.correct })) });
+  document.getElementById('qcm-next-btn').textContent = qcmIdx+1 < qcmQuestions.length ? 'التالي ▶' : 'النتائج ✓';
+  document.getElementById('qcm-nav').style.display = 'flex';
+}
+function nextQCM() {
+  if (qcmIdx+1 < qcmQuestions.length) { qcmIdx++; renderQCM(); return; }
+  qcmAnswers.forEach(a => { if (!progress.scores[a.word.id]) progress.scores[a.word.id]={qcm:null,rewrite:null}; progress.scores[a.word.id].qcm = a.correct?100:0; });
+  progress.sessions++; saveProgress(); clearDraft('qcm'); showResultsQCM();
+}
+function restartQCM() {
+  clearDraft('qcm'); document.getElementById('qcm-resume-bar').style.display='none';
+  qcmQuestions=shuffle(WORDS).map(w=>({word:w,opts:genOptions(w)})); qcmIdx=0; qcmSelected=false; qcmAnswers=[];
+  saveDraft('qcm',{questions:qcmQuestions.map(q=>q.word.id),answers:[]}); renderQCM();
+}
+function showResultsQCM() {
+  const correct=qcmAnswers.filter(a=>a.correct).length, pct=Math.round(correct/qcmAnswers.length*100);
+  const overall=calcOverall(), mastered=calcMastered();
+  document.getElementById('res-emoji').textContent = pct>=80?'🏆':pct>=60?'👍':'📚';
+  document.getElementById('res-score').textContent = pct+'%'; document.getElementById('res-score').style.color=barColor(pct);
+  setBar('res-bar',pct); document.getElementById('res-overall').textContent=overall+'%';
+  setBar('res-overall-bar',overall); document.getElementById('res-mastered').textContent=mastered+' / '+WORDS.length+' مصطلح متقن (≥ 70%)';
+  updatePills(overall);
+  const wordsEl=document.getElementById('res-words'); wordsEl.innerHTML='';
+  qcmAnswers.forEach(a => { const s=a.correct?100:0; wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${a.word.term}</div><div class="bar-wrap"><div class="bar-fill" style="width:${s}%;background:${barColor(s)}"></div></div><div class="word-result-pct" style="color:${barColor(s)}">${s}%</div></div>`; });
+  showPage('results');
+}
+
+// ══════════════════════════════════════
+//  REWRITE
+// ══════════════════════════════════════
+function startRewrite() {
+  lastMode = 'rewrite';
+  const draft = loadDraft('rewrite');
+  const wordMap = Object.fromEntries(WORDS.map(w=>[w.id,w]));
+  if (draft?.questions?.length && draft.answers?.length > 0 && draft.answers.length < draft.questions.length && draft.questions.every(id=>wordMap[id])) {
+    rwQuestions = draft.questions.map(id=>wordMap[id]); rwIdx=draft.answers.length;
+    rwAnswers=draft.answers.map(a=>({word:wordMap[a.wordId],score:a.score}));
+    document.getElementById('rw-resume-bar').style.display='flex'; showPage('rewrite'); renderRW(); return;
+  }
+  rwQuestions=shuffle(WORDS); rwIdx=0; rwAnswers=[];
+  document.getElementById('rw-resume-bar').style.display='none';
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[]}); showPage('rewrite'); renderRW();
+}
+function renderRW() {
+  const w=rwQuestions[rwIdx];
+  document.getElementById('rw-term').textContent=w.term;
+  document.getElementById('rw-counter').textContent=(rwIdx+1)+' / '+rwQuestions.length;
+  document.getElementById('rw-input').value=''; document.getElementById('rw-input').disabled=false;
+  document.getElementById('rw-feedback').style.display='none';
+  document.getElementById('rw-submit-nav').style.display='flex'; document.getElementById('rw-next-nav').style.display='none';
+}
+function submitRW() {
+  const input=document.getElementById('rw-input').value; if (!input.trim()) return;
+  const w=rwQuestions[rwIdx]; const sim=similarity(input,w.def);
+  rwAnswers.push({word:w,score:sim}); document.getElementById('rw-input').disabled=true;
+  const fb=document.getElementById('rw-feedback'); fb.style.display='block';
+  setBar('rw-bar',sim); const pctEl=document.getElementById('rw-pct'); pctEl.textContent=sim+'%'; pctEl.style.color=barColor(sim);
+  document.getElementById('rw-correct').textContent=w.def;
+  document.getElementById('rw-submit-nav').style.display='none'; document.getElementById('rw-next-nav').style.display='flex';
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:rwAnswers.map(a=>({wordId:a.word.id,score:a.score}))});
+}
+function nextRW() {
+  if (rwIdx+1 < rwQuestions.length) { rwIdx++; renderRW(); return; }
+  rwAnswers.forEach(a => { if (!progress.scores[a.word.id]) progress.scores[a.word.id]={qcm:null,rewrite:null}; progress.scores[a.word.id].rewrite=a.score; });
+  progress.sessions++; saveProgress(); clearDraft('rewrite'); showResultsRW();
+}
+function restartRW() {
+  clearDraft('rewrite'); document.getElementById('rw-resume-bar').style.display='none';
+  rwQuestions=shuffle(WORDS); rwIdx=0; rwAnswers=[];
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[]}); renderRW();
+}
+function showResultsRW() {
+  const avg=Math.round(rwAnswers.reduce((s,a)=>s+a.score,0)/rwAnswers.length);
+  const overall=calcOverall(), mastered=calcMastered();
+  document.getElementById('res-emoji').textContent=avg>=80?'🏆':avg>=60?'👍':'📚';
+  document.getElementById('res-score').textContent=avg+'%'; document.getElementById('res-score').style.color=barColor(avg);
+  setBar('res-bar',avg); document.getElementById('res-overall').textContent=overall+'%';
+  setBar('res-overall-bar',overall); document.getElementById('res-mastered').textContent=mastered+' / '+WORDS.length+' مصطلح متقن (≥ 70%)';
+  updatePills(overall);
+  const wordsEl=document.getElementById('res-words'); wordsEl.innerHTML='';
+  rwAnswers.forEach(a => { const corDef=a.score<90?`<div class="word-correct-def"><strong>الصحيح: </strong>${a.word.def}</div>`:''; wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${a.word.term}</div><div class="bar-wrap"><div class="bar-fill" style="width:${a.score}%;background:${barColor(a.score)}"></div></div><div class="word-result-pct" style="color:${barColor(a.score)}">${a.score}%</div>${corDef}</div>`; });
+  showPage('results');
+}
+function retryLast() { if (lastMode==='qcm') { clearDraft('qcm'); startQCM(); } else { clearDraft('rewrite'); startRewrite(); } }
+
+// ══════════════════════════════════════
+//  INIT — Check session on load
+// ══════════════════════════════════════
+(async function() {
+  const { data: { session } } = await db.auth.getSession();
+  if (session?.user) {
+    await checkUserAccess(session.user);
+  } else {
+    showPage('auth');
+  }
+})();
+</script>
+
+<!-- ══ PAGE: EXPIRED ══ -->
+<div id="pg-expired" class="page">
+  <div class="pending-box">
+    <div class="pending-icon">⏰</div>
+    <div class="pending-title">انتهى اشتراكك</div>
+    <div class="pending-desc">
+      انتهت صلاحية اشتراكك.<br>
+      تواصل مع المشرف لتجديد اشتراكك والمتابعة.
+    </div>
+    <button class="btn btn-secondary" onclick="handleLogout()" style="width:100%">تسجيل الخروج</button>
+  </div>
+</div>
+
+</body>
+</html>
