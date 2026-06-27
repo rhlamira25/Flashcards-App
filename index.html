@@ -618,7 +618,8 @@ async function handleSignup() {
 
 async function checkUserAccess(user) {
   currentUser = user;
-  const { data: profile } = await db.from('profiles').select('*').eq('email', user.email).single();
+  const { data: profiles } = await db.from('profiles').select('*').eq('email', user.email);
+const profile = profiles && profiles.length > 0 ? profiles[0] : null;
   if (profile && profile.is_approved) {
     document.getElementById('user-email-display').textContent = user.email;
     initApp();
