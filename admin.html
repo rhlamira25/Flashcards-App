@@ -304,7 +304,12 @@
 <script>
 const SUPABASE_URL = 'https://fakoavxxabsatafwllxo.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
-const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: {
+    persistSession: true,
+    storageKey: 'admin-session'
+  }
+});
 
 // ADMIN EMAIL — change this to your email
 const ADMIN_EMAIL = 'amirarahal2001@gmail.com';
