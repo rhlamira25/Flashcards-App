@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>لوحة الإدارة</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Cairo', sans-serif;
+    background: linear-gradient(135deg, #0a0a0f 0%, #0f1520 50%, #0a0a0f 100%);
+    color: #e8dcc8; min-height: 100vh; direction: rtl;
+  }
+
+  .page { display: none; flex-direction: column; align-items: center; padding: 20px 16px 40px; min-height: 100vh; }
+  .page.active { display: flex; }
+
+  /* AUTH */
+  .auth-box {
+    width: 100%; max-width: 380px; margin-top: 80px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(201,168,76,0.22);
+    border-radius: 20px; padding: 32px 28px;
+  }
+  .auth-title { font-size: 1.4rem; font-weight: 700; color: #c9a84c; text-align: center; margin-bottom: 6px; }
+  .auth-sub { font-size: 0.8rem; color: #8a7a60; text-align: center; margin-bottom: 24px; }
+  .form-group { margin-bottom: 16px; }
+  .form-label { display: block; font-size: 0.8rem; color: #8a7a60; margin-bottom: 6px; font-weight: 600; }
+  .form-input {
+    width: 100%; padding: 12px 14px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 12px; color: #e8dcc8; font-family: 'Cairo', sans-serif;
+    font-size: 0.9rem; outline: none; direction: ltr; text-align: left;
+  }
+  .form-input:focus { border-color: #c9a84c; }
+  .error-box {
+    background: rgba(170,74,74,0.12); border: 1px solid #aa4a4a;
+    border-radius: 10px; padding: 10px 14px; font-size: 0.82rem;
+    color: #da8a8a; margin-bottom: 14px; display: none;
+  }
+
+  /* BUTTONS */
+  .btn {
+    padding: 10px 18px; border-radius: 10px; border: none;
+    cursor: pointer; font-size: 0.88rem; font-family: 'Cairo', sans-serif;
+    font-weight: 700; transition: all 0.2s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary { background: linear-gradient(135deg, #c9a84c, #a07030); color: #0a0a0f; width: 100%; padding: 13px; border-radius: 12px; }
+  .btn-primary:not(:disabled):hover { filter: brightness(1.1); }
+  .btn-success { background: rgba(74,170,112,0.15); border: 1px solid #4aaa70; color: #6adca0; }
+  .btn-success:hover { background: rgba(74,170,112,0.25); }
+  .btn-danger { background: rgba(170,74,74,0.15); border: 1px solid #aa4a4a; color: #da8a8a; }
+  .btn-danger:hover { background: rgba(170,74,74,0.25); }
+  .btn-ghost { background: transparent; border: 1px solid rgba(201,168,76,0.27); color: #c9a84c; }
+  .btn-ghost:hover { background: rgba(201,168,76,0.1); }
+  .btn-sm { padding: 6px 12px; font-size: 0.78rem; border-radius: 8px; }
+
+  /* TOPBAR */
+  .topbar {
+    width: 100%; max-width: 900px;
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; padding-bottom: 16px;
+    border-bottom: 1px solid rgba(201,168,76,0.15);
+  }
+  .topbar-title { font-size: 1.3rem; font-weight: 700; color: #c9a84c; }
+  .topbar-sub { font-size: 0.75rem; color: #5a4e38; margin-top: 2px; }
+  .logout-btn {
+    background: transparent; border: 1px solid rgba(255,255,255,0.1);
+    color: #5a4e38; border-radius: 8px; padding: 6px 14px;
+    font-size: 0.75rem; cursor: pointer; font-family: 'Cairo', sans-serif;
+  }
+  .logout-btn:hover { border-color: #aa4a4a; color: #da8a8a; }
+
+  /* STATS */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 12px; width: 100%; max-width: 900px; margin-bottom: 24px;
+  }
+  .stat-card {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(201,168,76,0.15);
+    border-radius: 14px; padding: 16px; text-align: center;
+  }
+  .stat-num { font-size: 1.8rem; font-weight: 700; color: #c9a84c; }
+  .stat-label { font-size: 0.72rem; color: #8a7a60; margin-top: 2px; }
+
+  /* TABS */
+  .tabs {
+    display: flex; gap: 0; width: 100%; max-width: 900px;
+    background: rgba(255,255,255,0.05); border-radius: 12px; padding: 4px;
+    margin-bottom: 20px;
+  }
+  .tab-btn {
+    flex: 1; padding: 9px; border: none; border-radius: 9px;
+    background: transparent; color: #8a7a60;
+    font-family: 'Cairo', sans-serif; font-size: 0.85rem; font-weight: 700;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .tab-btn.active { background: linear-gradient(135deg, #c9a84c, #a07030); color: #0a0a0f; }
+
+  /* CARDS */
+  .content-area { width: 100%; max-width: 900px; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .user-card {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px; padding: 16px 18px; margin-bottom: 12px;
+    transition: border-color 0.2s;
+  }
+  .user-card:hover { border-color: rgba(201,168,76,0.25); }
+  .user-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+  .user-email { font-size: 0.88rem; font-weight: 700; color: #e8dcc8; word-break: break-all; }
+  .user-date { font-size: 0.72rem; color: #5a4e38; margin-top: 3px; }
+  .user-status { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .badge {
+    display: inline-block; border-radius: 20px; padding: 3px 10px;
+    font-size: 0.72rem; font-weight: 700;
+  }
+  .badge-pending { background: rgba(201,168,76,0.12); border: 1px solid rgba(201,168,76,0.3); color: #c9a84c; }
+  .badge-active { background: rgba(74,170,112,0.12); border: 1px solid #4aaa70; color: #6adca0; }
+  .badge-expired { background: rgba(170,74,74,0.12); border: 1px solid #aa4a4a; color: #da8a8a; }
+  .user-card-bottom { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .expiry-info { font-size: 0.75rem; color: #8a7a60; }
+  .expiry-info span { color: #c9a84c; font-weight: 700; }
+
+  /* APPROVE MODAL */
+  .modal-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7); display: none; align-items: center;
+    justify-content: center; z-index: 100; padding: 16px;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: #0f1520; border: 1px solid rgba(201,168,76,0.3);
+    border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 400px;
+  }
+  .modal-title { font-size: 1.1rem; font-weight: 700; color: #c9a84c; margin-bottom: 6px; }
+  .modal-sub { font-size: 0.8rem; color: #8a7a60; margin-bottom: 20px; }
+  .modal-email { font-size: 0.85rem; color: #e8dcc8; background: rgba(255,255,255,0.04); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; word-break: break-all; }
+  .duration-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+  .duration-btn {
+    padding: 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1);
+    background: transparent; color: #8a7a60; cursor: pointer;
+    font-family: 'Cairo', sans-serif; font-size: 0.82rem; font-weight: 700;
+    transition: all 0.2s; text-align: center;
+  }
+  .duration-btn.selected { background: rgba(201,168,76,0.15); border-color: #c9a84c; color: #c9a84c; }
+  .modal-actions { display: flex; gap: 10px; }
+  .modal-actions .btn { flex: 1; }
+
+  /* KEYS */
+  .key-card {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px; padding: 14px 18px; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  }
+  .key-value { font-family: monospace; font-size: 1rem; color: #c9a84c; letter-spacing: 0.1em; }
+  .key-meta { font-size: 0.72rem; color: #5a4e38; margin-top: 2px; }
+  .key-used-by { font-size: 0.75rem; color: #8a7a60; margin-top: 3px; }
+  .generate-bar {
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(201,168,76,0.15);
+    border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  }
+  .generate-bar input {
+    flex: 1; min-width: 120px; padding: 9px 12px;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px; color: #e8dcc8; font-family: 'Cairo', sans-serif;
+    font-size: 0.88rem; outline: none; direction: ltr;
+  }
+  .generate-bar input:focus { border-color: #c9a84c; }
+
+  .empty-state { text-align: center; padding: 40px 20px; color: #5a4e38; font-size: 0.85rem; }
+  .empty-icon { font-size: 2.5rem; margin-bottom: 10px; }
+
+  .spinner { width: 32px; height: 32px; border: 3px solid rgba(201,168,76,0.2); border-top-color: #c9a84c; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 60px auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .success-toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: rgba(74,170,112,0.9); color: #fff; padding: 10px 20px;
+    border-radius: 20px; font-size: 0.85rem; font-weight: 700;
+    display: none; z-index: 200; white-space: nowrap;
+  }
+  .success-toast.show { display: block; }
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="pg-loading" class="page active">
+  <div style="margin-top:40vh"><div class="spinner"></div></div>
+</div>
+
+<!-- AUTH -->
+<div id="pg-auth" class="page">
+  <div class="auth-box">
+    <div class="auth-title">🛡️ لوحة الإدارة</div>
+    <div class="auth-sub">هذه الصفحة للمشرف فقط</div>
+    <div id="auth-error" class="error-box"></div>
+    <div class="form-group">
+      <label class="form-label">البريد الإلكتروني</label>
+      <input type="email" class="form-input" id="admin-email" placeholder="admin@email.com">
+    </div>
+    <div class="form-group">
+      <label class="form-label">كلمة المرور</label>
+      <input type="password" class="form-input" id="admin-password" placeholder="••••••••">
+    </div>
+    <button class="btn btn-primary" onclick="adminLogin()" id="login-btn">دخول ←</button>
+  </div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="pg-dashboard" class="page">
+  <div class="topbar">
+    <div>
+      <div class="topbar-title">🛡️ لوحة الإدارة</div>
+      <div class="topbar-sub" id="admin-email-display"></div>
+    </div>
+    <button class="logout-btn" onclick="adminLogout()">خروج ↩</button>
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-num" id="stat-total">0</div>
+      <div class="stat-label">إجمالي المستخدمين</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-active">0</div>
+      <div class="stat-label">مشتركون نشطون</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="stat-pending">0</div>
+      <div class="stat-label">في الانتظار</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('users')">👥 المستخدمون</button>
+    <button class="tab-btn" onclick="switchTab('keys')">🔑 المفاتيح</button>
+  </div>
+
+  <div class="content-area">
+    <!-- USERS TAB -->
+    <div id="tab-users" class="tab-content active">
+      <div style="margin-bottom:14px;">
+        <input type="text" id="user-search" placeholder="🔍 ابحث بالاسم أو البريد الإلكتروني..." 
+          oninput="filterUsers(this.value)"
+          style="width:100%;padding:11px 14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:12px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.88rem;outline:none;direction:rtl;">
+      </div>
+      <div id="users-list"><div class="spinner"></div></div>
+    </div>
+
+    <!-- KEYS TAB -->
+    <div id="tab-keys" class="tab-content">
+      <div class="generate-bar">
+        <input type="text" id="new-key-input" placeholder="اكتب مفتاحاً أو اتركه فارغاً للتوليد التلقائي" />
+        <button class="btn btn-ghost" onclick="generateKey()">➕ إنشاء مفتاح</button>
+      </div>
+      <div id="keys-list"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- APPROVE MODAL -->
+<div class="modal-overlay" id="approve-modal">
+  <div class="modal">
+    <div class="modal-title">✅ تفعيل المستخدم</div>
+    <div class="modal-sub">اختر مدة الاشتراك للمستخدم</div>
+    <div class="modal-email" id="modal-email"></div>
+    <div class="duration-grid">
+      <button class="duration-btn" onclick="selectDuration(1)">شهر واحد</button>
+      <button class="duration-btn" onclick="selectDuration(3)">3 أشهر</button>
+      <button class="duration-btn" onclick="selectDuration(6)">6 أشهر</button>
+      <button class="duration-btn" onclick="selectDuration(12)">سنة كاملة</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="confirmApprove()" id="confirm-approve-btn" disabled>تفعيل ✓</button>
+      <button class="btn btn-ghost" onclick="closeModal()">إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<!-- RENEW MODAL -->
+<div class="modal-overlay" id="renew-modal">
+  <div class="modal">
+    <div class="modal-title">🔄 تجديد الاشتراك</div>
+    <div class="modal-sub">اختر مدة التجديد</div>
+    <div class="modal-email" id="renew-modal-email"></div>
+    <div class="duration-grid">
+      <button class="duration-btn" onclick="selectRenewDuration(1)">شهر واحد</button>
+      <button class="duration-btn" onclick="selectRenewDuration(3)">3 أشهر</button>
+      <button class="duration-btn" onclick="selectRenewDuration(6)">6 أشهر</button>
+      <button class="duration-btn" onclick="selectRenewDuration(12)">سنة كاملة</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="confirmRenew()" id="confirm-renew-btn" disabled>تجديد ✓</button>
+      <button class="btn btn-ghost" onclick="closeRenewModal()">إلغاء</button>
+    </div>
+  </div>
+</div>
+
+<div class="success-toast" id="toast"></div>
+
+<script>
+const SUPABASE_URL = 'https://fakoavxxabsatafwllxo.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ADMIN EMAIL — change this to your email
+const ADMIN_EMAIL = 'YOUR_ADMIN_EMAIL@gmail.com';
+
+let currentAdmin = null;
+let selectedDuration = null;
+let selectedUserEmail = null;
+let selectedRenewEmail = null;
+let selectedRenewDuration = null;
+
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('pg-' + id).classList.add('active');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ── AUTH ──
+async function adminLogin() {
+  const email = document.getElementById('admin-email').value.trim();
+  const password = document.getElementById('admin-password').value;
+  if (!email || !password) return;
+  const btn = document.getElementById('login-btn');
+  btn.disabled = true; btn.textContent = '...جاري التحقق';
+  const { data, error } = await db.auth.signInWithPassword({ email, password });
+  btn.disabled = false; btn.textContent = 'دخول ←';
+  if (error || data.user.email !== ADMIN_EMAIL) {
+    const el = document.getElementById('auth-error');
+    el.textContent = 'غير مصرح لك بالدخول'; el.style.display = 'block';
+    await db.auth.signOut(); return;
+  }
+  currentAdmin = data.user;
+  loadDashboard();
+}
+
+async function adminLogout() {
+  await db.auth.signOut();
+  currentAdmin = null;
+  showPage('auth');
+}
+
+// ── DASHBOARD ──
+async function loadDashboard() {
+  document.getElementById('admin-email-display').textContent = currentAdmin.email;
+  showPage('dashboard');
+  await Promise.all([loadUsers(), loadKeys()]);
+}
+
+// ── USERS ──
+let allUsers = [];
+
+async function loadUsers() {
+  const { data: users } = await db.from('profiles').select('*').order('created_at', { ascending: false });
+  allUsers = users || [];
+  renderUsers(allUsers);
+  updateStats(allUsers);
+}
+
+function filterUsers(query) {
+  if (!query.trim()) { renderUsers(allUsers); return; }
+  const q = query.toLowerCase();
+  const filtered = allUsers.filter(u =>
+    (u.email && u.email.toLowerCase().includes(q)) ||
+    (u.first_name && u.first_name.toLowerCase().includes(q)) ||
+    (u.last_name && u.last_name.toLowerCase().includes(q))
+  );
+  renderUsers(filtered);
+}
+
+function updateStats(users) {
+  const now = new Date();
+  let active = 0, pending = 0;
+  users.forEach(u => {
+    const expiry = u.expiry_date ? new Date(u.expiry_date) : null;
+    if (u.is_approved && expiry && expiry > now) active++;
+    if (!u.is_approved) pending++;
+  });
+  document.getElementById('stat-total').textContent = users.length;
+  document.getElementById('stat-active').textContent = active;
+  document.getElementById('stat-pending').textContent = pending;
+}
+
+function renderUsers(users) {
+  if (!users) return;
+  const now = new Date();
+  const list = document.getElementById('users-list');
+  if (!users.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">👥</div>لا يوجد مستخدمون بعد</div>'; return; }
+
+  list.innerHTML = '';
+  users.forEach(u => {
+    const isApproved = u.is_approved;
+    const expiry = u.expiry_date ? new Date(u.expiry_date) : null;
+    const isExpired = expiry && expiry < now;
+    const isActive = isApproved && expiry && !isExpired;
+    const isPending = !isApproved;
+
+    if (isActive) active++;
+    if (isPending) pending++;
+
+    let badgeHTML = '';
+    let expiryHTML = '';
+    let actionsHTML = '';
+
+    if (isPending) {
+      badgeHTML = '<span class="badge badge-pending">⏳ في الانتظار</span>';
+      actionsHTML = `<button class="btn btn-success btn-sm" onclick="openApproveModal('${u.email}')">✅ تفعيل</button>
+                     <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.email}')">🗑️ حذف</button>`;
+    } else if (isExpired) {
+      badgeHTML = '<span class="badge badge-expired">🔴 منتهي</span>';
+      expiryHTML = `<span class="expiry-info">انتهى في: <span>${expiry.toLocaleDateString('ar-DZ')}</span></span>`;
+      actionsHTML = `<button class="btn btn-success btn-sm" onclick="openRenewModal('${u.email}')">🔄 تجديد</button>
+                     <button class="btn btn-danger btn-sm" onclick="revokeUser('${u.email}')">❌ إلغاء</button>`;
+    } else if (isActive) {
+      const daysLeft = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+      badgeHTML = '<span class="badge badge-active">🟢 نشط</span>';
+      expiryHTML = `<span class="expiry-info">ينتهي في: <span>${expiry.toLocaleDateString('ar-DZ')}</span> (${daysLeft} يوم)</span>`;
+      actionsHTML = `<button class="btn btn-ghost btn-sm" onclick="openRenewModal('${u.email}')">🔄 تجديد</button>
+                     <button class="btn btn-danger btn-sm" onclick="revokeUser('${u.email}')">❌ إلغاء</button>`;
+    } else {
+      badgeHTML = '<span class="badge badge-pending">⚠️ بدون تاريخ</span>';
+      actionsHTML = `<button class="btn btn-ghost btn-sm" onclick="openRenewModal('${u.email}')">🔄 تعيين تاريخ</button>
+                     <button class="btn btn-danger btn-sm" onclick="revokeUser('${u.email}')">❌ إلغاء</button>`;
+    }
+
+    const date = new Date(u.created_at).toLocaleDateString('ar-DZ');
+    const fullName = [u.first_name, u.last_name].filter(Boolean).join(' ') || '—';
+    const studentType = u.student_type || '—';
+    const dob = u.date_of_birth ? new Date(u.date_of_birth).toLocaleDateString('ar-DZ') : '—';
+    list.innerHTML += `
+      <div class="user-card">
+        <div class="user-card-top">
+          <div>
+            <div class="user-email">${u.email}</div>
+            <div style="font-size:0.8rem;color:#c9a84c;margin-top:2px;font-weight:700;">${fullName}</div>
+            <div style="font-size:0.72rem;color:#5a4e38;margin-top:2px;">${studentType} · م: ${dob} · تسجيل: ${date}</div>
+          </div>
+          <div class="user-status">${badgeHTML}</div>
+        </div>
+        <div class="user-card-bottom">
+          ${expiryHTML}
+          ${actionsHTML}
+        </div>
+      </div>`;
+  });
+
+  // stats handled by updateStats()
+}
+
+// ── APPROVE ──
+function openApproveModal(email) {
+  selectedUserEmail = email; selectedDuration = null;
+  document.getElementById('modal-email').textContent = email;
+  document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('confirm-approve-btn').disabled = true;
+  document.getElementById('approve-modal').classList.add('active');
+}
+function closeModal() { document.getElementById('approve-modal').classList.remove('active'); }
+
+function selectDuration(months) {
+  selectedDuration = months;
+  document.querySelectorAll('#approve-modal .duration-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  document.getElementById('confirm-approve-btn').disabled = false;
+}
+
+async function confirmApprove() {
+  if (!selectedUserEmail || !selectedDuration) return;
+  const expiry = new Date();
+  expiry.setMonth(expiry.getMonth() + selectedDuration);
+
+  // Generate a unique key
+  const key = 'KEY-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+
+  await db.from('profiles').update({
+    is_approved: true,
+    expiry_date: expiry.toISOString(),
+    access_key: key
+  }).eq('email', selectedUserEmail);
+
+  // Add key to access_keys table
+  await db.from('access_keys').insert({ key, is_used: true, used_by: selectedUserEmail });
+
+  closeModal();
+  showToast('✅ تم تفعيل المستخدم بنجاح!');
+  await loadUsers();
+}
+
+// ── REVOKE ──
+async function revokeUser(email) {
+  if (!confirm('هل تريد إلغاء وصول هذا المستخدم؟')) return;
+  await db.from('profiles').update({ is_approved: false, expiry_date: null }).eq('email', email);
+  showToast('❌ تم إلغاء وصول المستخدم');
+  await loadUsers();
+}
+
+// ── DELETE ──
+async function deleteUser(email) {
+  if (!confirm('هل تريد حذف هذا المستخدم نهائياً؟')) return;
+  await db.from('profiles').delete().eq('email', email);
+  showToast('🗑️ تم حذف المستخدم');
+  await loadUsers();
+}
+
+// ── RENEW ──
+function openRenewModal(email) {
+  selectedRenewEmail = email; selectedRenewDuration = null;
+  document.getElementById('renew-modal-email').textContent = email;
+  document.querySelectorAll('#renew-modal .duration-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('confirm-renew-btn').disabled = true;
+  document.getElementById('renew-modal').classList.add('active');
+}
+function closeRenewModal() { document.getElementById('renew-modal').classList.remove('active'); }
+
+function selectRenewDuration(months) {
+  selectedRenewDuration = months;
+  document.querySelectorAll('#renew-modal .duration-btn').forEach(b => b.classList.remove('selected'));
+  event.target.classList.add('selected');
+  document.getElementById('confirm-renew-btn').disabled = false;
+}
+
+async function confirmRenew() {
+  if (!selectedRenewEmail || !selectedRenewDuration) return;
+  const expiry = new Date();
+  expiry.setMonth(expiry.getMonth() + selectedRenewDuration);
+  await db.from('profiles').update({ is_approved: true, expiry_date: expiry.toISOString() }).eq('email', selectedRenewEmail);
+  closeRenewModal();
+  showToast('🔄 تم تجديد الاشتراك بنجاح!');
+  await loadUsers();
+}
+
+// ── KEYS ──
+async function loadKeys() {
+  const { data: keys } = await db.from('access_keys').select('*').order('created_at', { ascending: false });
+  const list = document.getElementById('keys-list');
+  if (!keys || !keys.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">🔑</div>لا توجد مفاتيح بعد</div>'; return; }
+  list.innerHTML = '';
+  keys.forEach(k => {
+    const date = new Date(k.created_at).toLocaleDateString('ar-DZ');
+    const statusBadge = k.is_used
+      ? '<span class="badge badge-expired">مستخدم</span>'
+      : '<span class="badge badge-active">متاح</span>';
+    const usedBy = k.used_by ? `<div class="key-used-by">استخدمه: ${k.used_by}</div>` : '';
+    list.innerHTML += `
+      <div class="key-card">
+        <div>
+          <div class="key-value">${k.key}</div>
+          <div class="key-meta">أنشئ: ${date}</div>
+          ${usedBy}
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          ${statusBadge}
+          <button class="btn btn-ghost btn-sm" onclick="copyKey('${k.key}')">📋 نسخ</button>
+          ${!k.is_used ? `<button class="btn btn-danger btn-sm" onclick="deleteKey('${k.key}')">🗑️</button>` : ''}
+        </div>
+      </div>`;
+  });
+}
+
+async function generateKey() {
+  const input = document.getElementById('new-key-input').value.trim();
+  const key = input || 'KEY-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+  await db.from('access_keys').insert({ key, is_used: false, used_by: null });
+  document.getElementById('new-key-input').value = '';
+  showToast('✅ تم إنشاء المفتاح: ' + key);
+  await loadKeys();
+}
+
+async function deleteKey(key) {
+  if (!confirm('حذف هذا المفتاح؟')) return;
+  await db.from('access_keys').delete().eq('key', key);
+  showToast('🗑️ تم حذف المفتاح');
+  await loadKeys();
+}
+
+function copyKey(key) {
+  navigator.clipboard.writeText(key).then(() => showToast('📋 تم نسخ المفتاح: ' + key));
+}
+
+// ── TABS ──
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', (i === 0 && tab === 'users') || (i === 1 && tab === 'keys')));
+  document.getElementById('tab-users').classList.toggle('active', tab === 'users');
+  document.getElementById('tab-keys').classList.toggle('active', tab === 'keys');
+}
+
+// ── INIT ──
+(async function() {
+  const { data: { session } } = await db.auth.getSession();
+  if (session?.user?.email === ADMIN_EMAIL) {
+    currentAdmin = session.user;
+    loadDashboard();
+  } else {
+    showPage('auth');
+  }
+})();
+</script>
+</body>
+</html>
