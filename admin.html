@@ -242,6 +242,7 @@
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('users')">👥 المستخدمون</button>
     <button class="tab-btn" onclick="switchTab('keys')">🔑 المفاتيح</button>
+    <button class="tab-btn" onclick="switchTab('content')">📚 المحتوى</button>
   </div>
 
   <div class="content-area">
@@ -262,6 +263,89 @@
         <button class="btn btn-ghost" onclick="generateKey()">➕ إنشاء مفتاح</button>
       </div>
       <div id="keys-list"><div class="spinner"></div></div>
+    </div>
+
+    <!-- CONTENT TAB -->
+    <div id="tab-content" class="tab-content">
+      <!-- Filter bar -->
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+        <select id="content-subject" onchange="loadContentWords()" style="flex:1;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+          <option value="history">التاريخ</option>
+          <option value="geography">الجغرافيا</option>
+        </select>
+        <input type="text" id="content-search" placeholder="🔍 ابحث عن مصطلح..." oninput="filterContentWords(this.value)"
+          style="flex:2;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
+        <button class="btn btn-ghost" onclick="openAddWordModal()" style="white-space:nowrap;">➕ كلمة جديدة</button>
+      </div>
+      <div id="content-list"><div class="spinner"></div></div>
+    </div>
+
+    <!-- CONTENT TAB -->
+    <div id="tab-content" class="tab-content">
+      <!-- Filters -->
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+        <select id="content-subject" onchange="loadContentWords()" style="flex:1;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+          <option value="history">التاريخ</option>
+          <option value="geography">الجغرافيا</option>
+        </select>
+        <input type="text" id="content-search" placeholder="🔍 ابحث عن مصطلح..." oninput="filterContentWords(this.value)"
+          style="flex:2;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
+      </div>
+
+      <!-- Add Word Button -->
+      <button class="btn btn-success" onclick="openAddWordModal()" style="width:100%;margin-bottom:14px;">➕ إضافة مصطلح جديد</button>
+
+      <!-- Words List -->
+      <div id="content-words-list"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ADD/EDIT WORD MODAL -->
+<div class="modal-overlay" id="word-modal">
+  <div class="modal" style="max-height:90vh;overflow-y:auto;">
+    <div class="modal-title" id="word-modal-title">➕ إضافة مصطلح جديد</div>
+    <div class="modal-sub" id="word-modal-sub">أدخل معلومات المصطلح</div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">المادة</label>
+      <select id="word-subject" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+        <option value="history">التاريخ</option>
+        <option value="geography">الجغرافيا</option>
+      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <div>
+        <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">الفصل</label>
+        <select id="word-trimester" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+          <option value="1">الفصل 1</option>
+          <option value="2">الفصل 2</option>
+          <option value="3">الفصل 3</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">رقم المجموعة</label>
+        <input type="number" id="word-group-number" min="1" placeholder="1" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+      </div>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">اسم الدرس (اختياري)</label>
+      <input type="text" id="word-lesson" placeholder="مثال: الحركة الوطنية" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">اسم المجموعة (اختياري)</label>
+      <input type="text" id="word-group-name" placeholder="مثال: المقاومة والتحرر" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">المصطلح</label>
+      <input type="text" id="word-term" placeholder="المصطلح بالعربية" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
+    </div>
+    <div style="margin-bottom:16px;">
+      <label style="font-size:0.78rem;color:#8a7a60;display:block;margin-bottom:5px;">التعريف</label>
+      <textarea id="word-definition" placeholder="التعريف الكامل..." rows="4" style="width:100%;padding:9px 12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#e8dcc8;font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;resize:vertical;"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-success" onclick="saveWord()" id="save-word-btn">حفظ ✓</button>
+      <button class="btn btn-ghost" onclick="closeWordModal()">إلغاء</button>
     </div>
   </div>
 </div>
@@ -312,7 +396,7 @@ const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ADMIN EMAIL — change this to your email
-const ADMIN_EMAIL = 'amirarahal2001@gmail.com';
+const ADMIN_EMAIL = 'YOUR_ADMIN_EMAIL@gmail.com';
 
 let currentAdmin = null;
 let selectedDuration = null;
@@ -593,9 +677,179 @@ function copyKey(key) {
 
 // ── TABS ──
 function switchTab(tab) {
-  document.querySelectorAll('.tab-btn').forEach((b, i) => b.classList.toggle('active', (i === 0 && tab === 'users') || (i === 1 && tab === 'keys')));
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.classList.toggle('active',
+      (i === 0 && tab === 'users') ||
+      (i === 1 && tab === 'keys') ||
+      (i === 2 && tab === 'content')
+    );
+  });
   document.getElementById('tab-users').classList.toggle('active', tab === 'users');
   document.getElementById('tab-keys').classList.toggle('active', tab === 'keys');
+  document.getElementById('tab-content').classList.toggle('active', tab === 'content');
+  if (tab === 'content') loadContentWords();
+}
+
+// ── CONTENT MANAGEMENT ──
+let allContentWords = [];
+let editingWordId = null;
+
+async function loadContentWords() {
+  const subject = document.getElementById('content-subject').value;
+  const { data: words } = await db.from('words').select('*').eq('subject', subject).order('group_number').order('id');
+  allContentWords = words || [];
+  renderContentWords(allContentWords);
+}
+
+function filterContentWords(query) {
+  if (!query.trim()) { renderContentWords(allContentWords); return; }
+  const filtered = allContentWords.filter(w =>
+    w.term.includes(query) || w.definition.includes(query) || (w.group_name && w.group_name.includes(query))
+  );
+  renderContentWords(filtered);
+}
+
+function renderContentWords(words) {
+  const list = document.getElementById('content-words-list');
+  if (!words.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-icon">📚</div>لا توجد مصطلحات</div>';
+    return;
+  }
+
+  // Group by group_number
+  const groups = {};
+  words.forEach(w => {
+    const g = w.group_number;
+    if (!groups[g]) groups[g] = { name: w.group_name || `المجموعة ${g}`, lesson: w.lesson, trimester: w.trimester, words: [] };
+    groups[g].words.push(w);
+  });
+
+  list.innerHTML = '';
+  Object.keys(groups).sort((a,b) => parseInt(a)-parseInt(b)).forEach(g => {
+    const grp = groups[g];
+    list.innerHTML += `
+      <div style="background:rgba(255,255,255,0.02);border:1px solid rgba(201,168,76,0.15);border-radius:14px;padding:14px 16px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div>
+            <div style="font-weight:700;color:#c9a84c;font-size:0.9rem;">${grp.name}</div>
+            <div style="font-size:0.72rem;color:#5a4e38;margin-top:2px;">${grp.lesson || ''} ${grp.trimester ? '· الفصل '+grp.trimester : ''} · ${grp.words.length} مصطلح</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="renameGroup(${g})">✏️ تعديل المجموعة</button>
+        </div>
+        ${grp.words.map(w => `
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:10px;margin-bottom:6px;gap:8px;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:700;color:#e8dcc8;font-size:0.83rem;">${w.term}</div>
+              <div style="font-size:0.73rem;color:#8a7a60;margin-top:2px;line-height:1.4;">${w.definition.substring(0,80)}${w.definition.length>80?'...':''}</div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0;">
+              <button class="btn btn-ghost btn-sm" onclick="openEditWordModal(${w.id})">✏️</button>
+              <button class="btn btn-danger btn-sm" onclick="deleteWord(${w.id}, '${w.term.replace(/'/g,"\'")}')">🗑️</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  });
+}
+
+function openAddWordModal() {
+  editingWordId = null;
+  document.getElementById('word-modal-title').textContent = '➕ إضافة مصطلح جديد';
+  document.getElementById('word-modal-sub').textContent = 'أدخل معلومات المصطلح';
+  document.getElementById('word-subject').value = document.getElementById('content-subject').value;
+  document.getElementById('word-trimester').value = '1';
+  document.getElementById('word-group-number').value = '';
+  document.getElementById('word-lesson').value = '';
+  document.getElementById('word-group-name').value = '';
+  document.getElementById('word-term').value = '';
+  document.getElementById('word-definition').value = '';
+  document.getElementById('save-word-btn').textContent = 'إضافة ✓';
+  document.getElementById('word-modal').classList.add('active');
+}
+
+function openEditWordModal(id) {
+  const word = allContentWords.find(w => w.id === id);
+  if (!word) return;
+  editingWordId = id;
+  document.getElementById('word-modal-title').textContent = '✏️ تعديل المصطلح';
+  document.getElementById('word-modal-sub').textContent = 'عدّل المعلومات ثم احفظ';
+  document.getElementById('word-subject').value = word.subject;
+  document.getElementById('word-trimester').value = word.trimester || 1;
+  document.getElementById('word-group-number').value = word.group_number;
+  document.getElementById('word-lesson').value = word.lesson || '';
+  document.getElementById('word-group-name').value = word.group_name || '';
+  document.getElementById('word-term').value = word.term;
+  document.getElementById('word-definition').value = word.definition;
+  document.getElementById('save-word-btn').textContent = 'حفظ التعديل ✓';
+  document.getElementById('word-modal').classList.add('active');
+}
+
+function closeWordModal() {
+  document.getElementById('word-modal').classList.remove('active');
+  editingWordId = null;
+}
+
+async function saveWord() {
+  const term = document.getElementById('word-term').value.trim();
+  const definition = document.getElementById('word-definition').value.trim();
+  const groupNumber = parseInt(document.getElementById('word-group-number').value);
+
+  if (!term || !definition || !groupNumber) {
+    showToast('⚠️ يرجى ملء المصطلح والتعريف ورقم المجموعة');
+    return;
+  }
+
+  const wordData = {
+    subject: document.getElementById('word-subject').value,
+    trimester: parseInt(document.getElementById('word-trimester').value),
+    lesson: document.getElementById('word-lesson').value.trim() || null,
+    group_number: groupNumber,
+    group_name: document.getElementById('word-group-name').value.trim() || null,
+    term,
+    definition
+  };
+
+  const btn = document.getElementById('save-word-btn');
+  btn.disabled = true;
+
+  if (editingWordId) {
+    await db.from('words').update(wordData).eq('id', editingWordId);
+    showToast('✅ تم تعديل المصطلح بنجاح!');
+  } else {
+    await db.from('words').insert(wordData);
+    showToast('✅ تم إضافة المصطلح بنجاح!');
+  }
+
+  btn.disabled = false;
+  closeWordModal();
+  await loadContentWords();
+}
+
+async function deleteWord(id, term) {
+  if (!confirm(`هل تريد حذف المصطلح "${term}"؟`)) return;
+  await db.from('words').delete().eq('id', id);
+  showToast('🗑️ تم حذف المصطلح');
+  await loadContentWords();
+}
+
+async function renameGroup(groupNumber) {
+  const subject = document.getElementById('content-subject').value;
+  const grpWords = allContentWords.filter(w => w.group_number === groupNumber);
+  if (!grpWords.length) return;
+
+  const currentName = grpWords[0].group_name || `المجموعة ${groupNumber}`;
+  const newName = prompt('اسم المجموعة الجديد:', currentName);
+  if (!newName || newName === currentName) return;
+
+  const currentLesson = grpWords[0].lesson || '';
+  const newLesson = prompt('اسم الدرس (اتركه فارغاً للإبقاء على الحالي):', currentLesson);
+
+  await db.from('words').update({
+    group_name: newName,
+    lesson: newLesson !== null ? newLesson : currentLesson
+  }).eq('subject', subject).eq('group_number', groupNumber);
+
+  showToast('✅ تم تعديل المجموعة');
+  await loadContentWords();
 }
 
 // ── INIT ──
