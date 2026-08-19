@@ -298,6 +298,7 @@
     <button class="tab-btn" onclick="switchTab('content')">📚 المحتوى</button>
     <button class="tab-btn" onclick="switchTab('components')">🧩 المكونات</button>
     <button class="tab-btn" onclick="switchTab('review')">🔍 المراجعة <span id="review-pending-badge" style="display:none;font-size:0.65rem;background:var(--gold);color:#0a0a0f;border-radius:8px;padding:1px 6px;margin-right:4px;"></span></button>
+    <button class="tab-btn" onclick="switchTab('exams')">📅 الامتحانات</button>
   </div>
 
   <div class="content-area">
@@ -385,6 +386,14 @@
         </div>
         <div id="variants-list"><div class="spinner"></div></div>
       </div>
+    </div>
+
+    <!-- EXAMS TAB — official exam dates, propagated to all students' exams rows on save -->
+    <div id="tab-exams" class="tab-content">
+      <div style="font-size:0.78rem;color:var(--text-sub);margin-bottom:14px;line-height:1.6;">
+        هذه التواريخ الرسمية تُطبَّق تلقائياً على كل الطلاب (الحاليين والجدد). عند تأكيد تاريخ امتحان، ضع علامة "مؤكد" ليختفي وسم "تقديري" عند الطالب.
+      </div>
+      <div id="exams-list"><div class="spinner"></div></div>
     </div>
   </div>
 </div>
@@ -506,7 +515,7 @@ const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ADMIN EMAIL — change this to your email
-const ADMIN_EMAIL = 'amirarahal2001@gmail.com';
+const ADMIN_EMAIL = 'YOUR_ADMIN_EMAIL@gmail.com';
 
 let currentAdmin = null;
 let selectedDuration = null;
@@ -875,7 +884,8 @@ function switchTab(tab) {
       (i === 1 && tab === 'keys') ||
       (i === 2 && tab === 'content') ||
       (i === 3 && tab === 'components') ||
-      (i === 4 && tab === 'review')
+      (i === 4 && tab === 'review') ||
+      (i === 5 && tab === 'exams')
     );
   });
   document.getElementById('tab-users').classList.toggle('active', tab === 'users');
@@ -883,9 +893,11 @@ function switchTab(tab) {
   document.getElementById('tab-content').classList.toggle('active', tab === 'content');
   document.getElementById('tab-components').classList.toggle('active', tab === 'components');
   document.getElementById('tab-review').classList.toggle('active', tab === 'review');
+  document.getElementById('tab-exams').classList.toggle('active', tab === 'exams');
   if (tab === 'content') { populateContentTypeFilter(); loadContentWords(); }
   if (tab === 'components') loadComponentWords();
   if (tab === 'review') loadSubstitutions();
+  if (tab === 'exams') loadExamDates();
 }
 
 function switchReviewSubtab(sub) {
@@ -899,6 +911,75 @@ function switchReviewSubtab(sub) {
 }
 
 // ── REVIEW QUEUE (word substitutions + whole-answer variants) ──
+// ══════════════════════════════════════
+//  EXAM DATES (official, propagated to every student's own `exams` rows)
+// ══════════════════════════════════════
+const EXAM_TYPE_DEFAULTS = [
+  { exam_type: 'trimester1', name: 'الفصل الأول' },
+  { exam_type: 'trimester2', name: 'الفصل الثاني' },
+  { exam_type: 'trimester3', name: 'الفصل الثالث' },
+  { exam_type: 'bac', name: 'البكالوريا' }
+];
+
+async function loadExamDates() {
+  const listEl = document.getElementById('exams-list');
+  listEl.innerHTML = '<div class="spinner"></div>';
+
+  let { data: rows } = await db.from('exam_official_dates').select('*');
+  rows = rows || [];
+  const byType = {}; rows.forEach(r => byType[r.exam_type] = r);
+
+  // Seed any missing rows so the admin always sees all 4 exam types, even before first save
+  const missing = EXAM_TYPE_DEFAULTS.filter(d => !byType[d.exam_type]);
+  if (missing.length) {
+    const seedRows = missing.map(d => ({ exam_type: d.exam_type, name: d.name, exam_date: null, date_status: 'provisional' }));
+    const { data: inserted } = await db.from('exam_official_dates').insert(seedRows).select();
+    (inserted || []).forEach(r => byType[r.exam_type] = r);
+  }
+
+  listEl.innerHTML = EXAM_TYPE_DEFAULTS.map(d => {
+    const r = byType[d.exam_type] || { exam_date: null, date_status: 'provisional' };
+    return `
+    <div class="user-card" style="margin-bottom:10px;">
+      <div style="font-weight:700;color:var(--text);margin-bottom:8px;">${d.name}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <input type="date" id="exam-date-${d.exam_type}" value="${r.exam_date || ''}" style="flex:1;min-width:140px;padding:8px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;direction:ltr;">
+        <select id="exam-status-${d.exam_type}" style="padding:8px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;">
+          <option value="provisional" ${r.date_status==='provisional'?'selected':''}>تقديري</option>
+          <option value="confirmed" ${r.date_status==='confirmed'?'selected':''}>مؤكد</option>
+        </select>
+        <button class="btn btn-success" onclick="saveExamDate('${d.exam_type}')" style="padding:8px 16px;">💾 حفظ</button>
+      </div>
+      <div id="exam-saved-note-${d.exam_type}" style="font-size:0.72rem;color:var(--text-faint);margin-top:6px;"></div>
+    </div>`;
+  }).join('');
+}
+
+// Saves the official date, then propagates it to every existing student's own `exams` row
+// for this exam_type (that table is per-user — see index_v3.html — so this is a bulk update,
+// not a single row). New sign-ups get it automatically since the student app now seeds its
+// defaults from exam_official_dates instead of hardcoded dates.
+async function saveExamDate(examType) {
+  const dateVal = document.getElementById(`exam-date-${examType}`).value;
+  const statusVal = document.getElementById(`exam-status-${examType}`).value;
+  const noteEl = document.getElementById(`exam-saved-note-${examType}`);
+  if (!dateVal) { noteEl.textContent = '⚠️ أدخل تاريخاً أولاً'; noteEl.style.color = 'var(--wrong-text, #e05252)'; return; }
+
+  const def = EXAM_TYPE_DEFAULTS.find(d => d.exam_type === examType);
+  await db.from('exam_official_dates').upsert({
+    exam_type: examType, name: def.name, exam_date: dateVal, date_status: statusVal, updated_at: new Date().toISOString()
+  }, { onConflict: 'exam_type' });
+
+  // Propagate to every student's own exams row of this type — including plans already
+  // pointing at it. This does not retroactively change a plan's already-computed schedule
+  // (target_date stored on study_plans), only the exams record students see and pick from.
+  const { error: propErr } = await db.from('exams').update({ exam_date: dateVal, date_status: statusVal }).eq('exam_type', examType);
+
+  noteEl.style.color = propErr ? 'var(--wrong-text, #e05252)' : 'var(--correct-text, #4caf7d)';
+  noteEl.textContent = propErr ? '⚠️ حُفظ التاريخ الرسمي لكن فشل تعميمه على الطلاب الحاليين' : '✓ تم الحفظ وتعميمه على كل الطلاب';
+  setTimeout(() => { if (noteEl) noteEl.textContent = ''; }, 4000);
+}
+
 async function loadSubstitutions() {
   const listEl = document.getElementById('substitutions-list');
   listEl.innerHTML = '<div class="spinner"></div>';
