@@ -337,6 +337,7 @@
   .kb-tab { flex: 1; background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text-sub); border-radius: 8px; padding: 7px 4px; font-family: 'Cairo', sans-serif; font-size: 0.78rem; cursor: pointer; }
   .kb-tab.active { background: var(--accent-dim); border-color: var(--accent-border); color: var(--accent); font-weight: 700; }
   .kb-row { display: flex; gap: 4px; margin-bottom: 4px; justify-content: center; }
+  .kb-keys .kb-row { direction: ltr; } /* letter grid stays in fixed physical-keyboard order, unlike the bottom row (backspace/space/continue) which should stay RTL */
   .kb-key { flex: 1; min-width: 0; background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); border-radius: 8px; padding: 15px 3px; font-family: 'Cairo', sans-serif; font-size: 1.05rem; cursor: pointer; touch-action: manipulation; }
   .kb-row-short .kb-key { flex: 0 1 9%; }
   .kb-key:active { background: var(--surface-hover); }
@@ -1287,7 +1288,7 @@ select.form-input{appearance:auto;}
         <button type="button" class="kb-key kb-wide kb-enter" onclick="kbEnterPressed()">⏎ متابعة</button>
       </div>
     </div>
-    <div class="nav" id="rw-submit-nav"><button class="btn btn-primary" onclick="submitRW()">تصحيح ✓</button><span style="font-size:0.8rem;color:var(--text-sub)" id="rw-counter">1 / 10</span></div>
+    <div class="nav" id="rw-submit-nav"><button class="btn btn-primary" onclick="submitRW()">تصحيح ✓</button><button class="btn btn-ghost" id="rw-pass-btn" style="display:none;" onclick="passRW()">تخطي ⏭</button><span style="font-size:0.8rem;color:var(--text-sub)" id="rw-counter">1 / 10</span></div>
     <div id="rw-feedback" class="rw-feedback" style="display:none">
       <div class="feedback-label">دقتك لهذا المصطلح</div>
       <div class="bar-wrap"><div class="bar-fill" id="rw-bar"></div></div>
@@ -2359,6 +2360,41 @@ async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
 // where a silent failure here previously meant a student could finish a real writing
 // test, see normal-looking results, and have nothing actually saved — can tell whether
 // this genuinely persisted instead of assuming success unconditionally.
+// Casual (outside-plan) rewrite tests persist per-answer, not only at full completion, so an
+// abandoned/unfinished session doesn't lose the words the student did answer.
+let currentCasualTestId = null;
+
+async function persistOneCasualAnswer(testId, a) {
+  if (!testId) return;
+  try {
+    const { error: ansErr } = await db.from('rewrite_test_answers').insert({
+      test_id: testId, word_id: a.word.id, raw_student_answer: a.raw,
+      normalized_student_answer: a.match.normalizedStudent, match_type: a.match.matchType,
+      similarity_score: a.match.similarity, score: a.match.score
+    });
+    if (ansErr) { console.error('persistOneCasualAnswer answer insert failed:', ansErr); return; }
+
+    const level = classifyProficiency(a.match.score);
+    const { data: existingProg } = await db.from('concept_progress').select('*')
+      .eq('user_id', currentUser.id).eq('word_id', a.word.id);
+    const isFirstEver = !existingProg || existingProg.length === 0;
+    const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
+    const nextReviewAt = addDaysStr(todayStr(), interval);
+    if (!isFirstEver) {
+      await db.from('concept_progress').update({
+        current_proficiency: a.match.score, proficiency_level: level.key, last_tested_at: new Date().toISOString(),
+        next_review_at: nextReviewAt, current_interval: interval
+      }).eq('id', existingProg[0].id);
+    } else {
+      await db.from('concept_progress').insert({
+        user_id: currentUser.id, word_id: a.word.id, current_proficiency: a.match.score,
+        proficiency_level: level.key, last_tested_at: new Date().toISOString(),
+        next_review_at: nextReviewAt, current_interval: interval
+      });
+    }
+  } catch (e) { console.error('persistOneCasualAnswer failed:', e); }
+}
+
 async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
   try {
     const { data: testRows, error: testErr } = await db.from('rewrite_tests').insert({
@@ -4277,11 +4313,18 @@ async function startRewrite() {
   if (draft?.questions?.length && draft.answers?.length > 0 && draft.answers.length < draft.questions.length && draft.questions.every(id=>wordMap[id])) {
     rwQuestions = draft.questions.map(id=>wordMap[id]); rwIdx=draft.answers.length;
     rwAnswers=draft.answers.map(a=>({word:wordMap[a.wordId],raw:a.raw,match:a.match}));
+    currentCasualTestId = draft.testId || null;
     document.getElementById('rw-resume-bar').style.display='flex'; enterRewritePage(); return;
   }
   rwQuestions=shuffle(WORDS); rwIdx=0; rwAnswers=[];
   document.getElementById('rw-resume-bar').style.display='none';
-  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[]}); enterRewritePage();
+  const { data: testRows, error: testErr } = await db.from('rewrite_tests').insert({
+    user_id: currentUser.id, subject: currentSubject, group_number: currentGroup === 'all' ? null : currentGroup,
+    submitted_at: null, overall_score: null
+  }).select();
+  if (testErr) console.error('startRewrite test row creation failed:', testErr);
+  currentCasualTestId = (testRows && testRows[0]) ? testRows[0].id : null;
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[],testId:currentCasualTestId}); enterRewritePage();
 }
 async function loadRWVariants(wordIds) {
   rwVariants = {};
@@ -4406,7 +4449,18 @@ function renderRW() {
   document.getElementById('rw-input').value=''; document.getElementById('rw-input').disabled=false;
   document.getElementById('rw-feedback').style.display='none';
   document.getElementById('rw-submit-nav').style.display='flex'; document.getElementById('rw-next-nav').style.display='none';
+  const isCasual = !isReviewSession && !isPlanLearnSession && !isSecondChanceRetest;
+  document.getElementById('rw-pass-btn').style.display = (isCasual && rwQuestions.length > 1) ? 'inline-block' : 'none';
   applyKeyboardMode();
+}
+// Pass (casual flow only): defer the current word to the very end of the test instead of
+// answering it now — nothing is scored or persisted for it until the student actually answers it.
+function passRW() {
+  if (rwQuestions.length <= 1) return;
+  const [passed] = rwQuestions.splice(rwIdx, 1);
+  rwQuestions.push(passed);
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:rwAnswers.map(a=>({wordId:a.word.id,raw:a.raw,match:a.match})),testId:currentCasualTestId});
+  renderRW();
 }
 // ══════════════════════════════════════
 //  SECOND CHANCE (§14-18) — any review concept scoring <60% gets a
@@ -4513,7 +4567,8 @@ async function submitRW() {
   const w=rwQuestions[rwIdx];
   const match = matchAnswer(input, w.def, rwVariants[w.id]);
   const score = match.score;
-  rwAnswers.push({word:w, raw:input, match}); document.getElementById('rw-input').disabled=true;
+  const answerEntry = {word:w, raw:input, match};
+  rwAnswers.push(answerEntry); document.getElementById('rw-input').disabled=true;
   const fb=document.getElementById('rw-feedback'); fb.style.display='block';
   setBar('rw-bar',score); const pctEl=document.getElementById('rw-pct'); pctEl.textContent=score+'%'; pctEl.style.color=barColor(score);
   document.getElementById('rw-diff-box').innerHTML = '<span style="color:var(--text-sub);font-size:0.8rem;">...جاري التحليل</span>';
@@ -4523,7 +4578,11 @@ async function submitRW() {
   document.getElementById('rw-pending-note').style.display = match.matchType==='unknown' ? 'block' : 'none';
   if (match.matchType==='unknown') logUnknownVariant(w.id, input, match.normalizedStudent);
   document.getElementById('rw-submit-nav').style.display='none'; document.getElementById('rw-next-nav').style.display='flex';
-  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:rwAnswers.map(a=>({wordId:a.word.id,raw:a.raw,match:a.match}))});
+  // Casual (outside-plan) flow only — review/plan/second-chance still persist their whole batch on completion.
+  if (!isReviewSession && !isPlanLearnSession && !isSecondChanceRetest) {
+    await persistOneCasualAnswer(currentCasualTestId, answerEntry);
+  }
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:rwAnswers.map(a=>({wordId:a.word.id,raw:a.raw,match:a.match})),testId:currentCasualTestId});
 }
 async function nextRW() {
   if (rwIdx+1 < rwQuestions.length) { rwIdx++; renderRW(); return; }
@@ -4582,13 +4641,23 @@ async function nextRW() {
   }
   rwAnswers.forEach(a => { if (!progress.scores[a.word.id]) progress.scores[a.word.id]={qcm:null,rewrite:null}; progress.scores[a.word.id].rewrite=a.match.score; });
   progress.sessions++; saveProgress(); clearDraft('rewrite');
-  await persistRewriteTest(currentSubject, currentGroup, rwAnswers, avgScore);
+  if (currentCasualTestId) {
+    const { error: finalizeErr } = await db.from('rewrite_tests').update({ submitted_at: new Date().toISOString(), overall_score: avgScore }).eq('id', currentCasualTestId);
+    if (finalizeErr) console.error('nextRW finalize casual test failed:', finalizeErr);
+  }
+  currentCasualTestId = null;
   showResultsRW();
 }
-function restartRW() {
+async function restartRW() {
   clearDraft('rewrite'); document.getElementById('rw-resume-bar').style.display='none';
   rwQuestions=shuffle(WORDS); rwIdx=0; rwAnswers=[];
-  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[]}); renderRW();
+  const { data: testRows, error: testErr } = await db.from('rewrite_tests').insert({
+    user_id: currentUser.id, subject: currentSubject, group_number: currentGroup === 'all' ? null : currentGroup,
+    submitted_at: null, overall_score: null
+  }).select();
+  if (testErr) console.error('restartRW test row creation failed:', testErr);
+  currentCasualTestId = (testRows && testRows[0]) ? testRows[0].id : null;
+  saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[],testId:currentCasualTestId}); renderRW();
 }
 function showResultsRW() {
   const avg=Math.round(rwAnswers.reduce((s,a)=>s+a.match.score,0)/rwAnswers.length);
