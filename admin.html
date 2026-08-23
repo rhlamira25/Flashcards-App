@@ -1602,6 +1602,7 @@ async function loadUnknownVariants() {
 function renderUnknownVariantsList(rows) {
   const listEl = document.getElementById('variants-list');
   if (!rows.length) { listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">✅</div>لا توجد إجابات بانتظار المراجعة</div>'; return; }
+  const verdictLabel = { accept: '✅ اعتماد', reject: '❌ رفض', partial: '🟡 جزئي', uncertain: '❔ غير متأكد' };
   listEl.innerHTML = rows.map(r => `
     <div class="review-card">
       <div class="review-term">${r.words?.term || 'مصطلح محذوف'}<span class="review-count">×${r.occurrence_count}</span></div>
@@ -1609,6 +1610,11 @@ function renderUnknownVariantsList(rows) {
         <div class="review-expected"><strong>التعريف الأصلي: </strong>${r.words?.definition || ''}</div>
         <div class="review-student"><strong>إجابة الطالب: </strong>${r.submitted_variant}</div>
       </div>
+      ${r.ai_verdict ? `
+      <div style="background:var(--accent-dim, #f5f0e6);border:1px solid var(--accent-border, #e0d5c0);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:0.8rem;line-height:1.6;">
+        <strong>🤖 اقتراح الذكاء الاصطناعي: ${verdictLabel[r.ai_verdict] || r.ai_verdict}</strong>
+        ${r.ai_reasoning ? `<div style="color:#666;margin-top:3px;">${r.ai_reasoning}</div>` : ''}
+      </div>` : ''}
       <div class="review-actions">
         <button class="btn-approve" onclick="approveVariant(${r.id}, ${r.word_id})">✅ اعتماد كإجابة صحيحة</button>
         <button class="btn-reject" onclick="rejectVariant(${r.id})">❌ رفض</button>
@@ -1618,7 +1624,20 @@ function renderUnknownVariantsList(rows) {
 async function approveVariant(id, wordId) {
   const { data: rows } = await db.from('unknown_variants').select('*').eq('id', id);
   if (rows && rows.length) {
-    await db.from('word_variants').insert({ word_id: wordId, variant_text: rows[0].submitted_variant, source: 'admin' });
+    const r = rows[0];
+    await db.from('word_variants').insert({ word_id: wordId, variant_text: r.submitted_variant, source: 'admin' });
+    // Propose the AI-identified synonym pairs too, so future answers using the same word-level
+    // substitution match directly without needing another AI call (item 6).
+    if (Array.isArray(r.ai_word_pairs)) {
+      const acceptedPairs = r.ai_word_pairs.filter(p => p.isSynonym);
+      for (const p of acceptedPairs) {
+        await db.from('word_synonym_pairs').insert({
+          word_id: wordId, expected_phrase: p.expected, normalized_expected_phrase: p.expected,
+          student_phrase: p.student, normalized_student_phrase: p.student,
+          status: 'accepted', occurrence_count: 1, reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString()
+        });
+      }
+    }
   }
   await db.from('unknown_variants').update({ status: 'accepted', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id);
   loadUnknownVariants(); refreshReviewBadge();
