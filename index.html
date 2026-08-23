@@ -2345,13 +2345,53 @@ async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
       .eq('word_id', wordId).eq('normalized_variant', normalizedAnswer);
     if (existing && existing.length > 0) {
       await db.from('unknown_variants').update({ occurrence_count: existing[0].occurrence_count + 1 }).eq('id', existing[0].id);
+      return existing[0]; // already judged (or being judged) — caller skips re-triggering the AI
     } else {
-      await db.from('unknown_variants').insert({
+      const { data: inserted } = await db.from('unknown_variants').insert({
         word_id: wordId, submitted_variant: rawAnswer, normalized_variant: normalizedAnswer,
         occurrence_count: 1, status: 'pending'
-      });
+      }).select();
+      return inserted && inserted[0] ? inserted[0] : null;
     }
-  } catch (e) { console.error('logUnknownVariant failed:', e); }
+  } catch (e) { console.error('logUnknownVariant failed:', e); return null; }
+}
+
+// Item 6 (Arabic scoring philosophy) — fire-and-forget AI-assist judgment on a fresh 'unknown'
+// variant. Always records ai_verdict/ai_reasoning on the unknown_variants row for the admin's
+// review queue. Only auto-corrects the interim score for the casual (outside-plan) flow, where
+// the just-submitted answer is already persisted per-word and its exact row is known; review/plan
+// answers still wait for the admin's manual decision to be retroactively corrected.
+async function triggerAiJudgment(variantRow, wordId, term, expectedAnswer, rawStudentAnswer, normalizedExpected, normalizedStudent, applyCtx) {
+  if (!variantRow || variantRow.ai_checked_at) return; // already judged once — don't re-spend a Gemini call on a repeat
+  try {
+    const { data: { session } } = await db.auth.getSession();
+    if (!session) return;
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/judge-answer-variant`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ term, expectedAnswer, studentAnswer: rawStudentAnswer, normalizedExpected, normalizedStudent })
+    });
+    const result = await res.json().catch(() => null);
+    if (!res.ok || !result || !result.success) { console.error('triggerAiJudgment failed:', result); return; }
+
+    await db.from('unknown_variants').update({
+      ai_verdict: result.verdict, ai_reasoning: result.reasoning || null, ai_checked_at: new Date().toISOString(),
+      ai_word_pairs: result.wordPairs && result.wordPairs.length ? result.wordPairs : null
+    }).eq('id', variantRow.id);
+
+    if (!applyCtx) return; // holistic-only or non-casual context — leave scoring to the admin's eventual decision
+    const score = typeof result.score === 'number' ? result.score : (result.verdict === 'accept' ? 100 : null);
+    if (score === null) return; // 'reject'/'uncertain' with no numeric score — keep the original raw fuzzy score as-is
+
+    if (applyCtx.answerRowId) {
+      await db.from('rewrite_test_answers').update({ score }).eq('id', applyCtx.answerRowId);
+    }
+    const { data: existingProg } = await db.from('concept_progress').select('*').eq('user_id', currentUser.id).eq('word_id', wordId);
+    if (existingProg && existingProg.length) {
+      const level = classifyProficiency(score);
+      await db.from('concept_progress').update({ current_proficiency: score, proficiency_level: level.key }).eq('id', existingProg[0].id);
+    }
+  } catch (e) { console.error('triggerAiJudgment failed:', e); }
 }
 
 // Persists a completed rewrite test + per-word answers + updates concept_progress.
@@ -2365,14 +2405,14 @@ async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
 let currentCasualTestId = null;
 
 async function persistOneCasualAnswer(testId, a) {
-  if (!testId) return;
+  if (!testId) return null;
   try {
-    const { error: ansErr } = await db.from('rewrite_test_answers').insert({
+    const { data: inserted, error: ansErr } = await db.from('rewrite_test_answers').insert({
       test_id: testId, word_id: a.word.id, raw_student_answer: a.raw,
       normalized_student_answer: a.match.normalizedStudent, match_type: a.match.matchType,
       similarity_score: a.match.similarity, score: a.match.score
-    });
-    if (ansErr) { console.error('persistOneCasualAnswer answer insert failed:', ansErr); return; }
+    }).select();
+    if (ansErr) { console.error('persistOneCasualAnswer answer insert failed:', ansErr); return null; }
 
     const level = classifyProficiency(a.match.score);
     const { data: existingProg } = await db.from('concept_progress').select('*')
@@ -2392,7 +2432,8 @@ async function persistOneCasualAnswer(testId, a) {
         next_review_at: nextReviewAt, current_interval: interval
       });
     }
-  } catch (e) { console.error('persistOneCasualAnswer failed:', e); }
+    return inserted && inserted[0] ? inserted[0].id : null;
+  } catch (e) { console.error('persistOneCasualAnswer failed:', e); return null; }
 }
 
 async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
@@ -4576,11 +4617,17 @@ async function submitRW() {
   renderDiffFeedback(segments);
   document.getElementById('rw-correct').textContent=w.def;
   document.getElementById('rw-pending-note').style.display = match.matchType==='unknown' ? 'block' : 'none';
-  if (match.matchType==='unknown') logUnknownVariant(w.id, input, match.normalizedStudent);
+  const isCasualFlow = !isReviewSession && !isPlanLearnSession && !isSecondChanceRetest;
+  let casualAnswerRowId = null;
   document.getElementById('rw-submit-nav').style.display='none'; document.getElementById('rw-next-nav').style.display='flex';
   // Casual (outside-plan) flow only — review/plan/second-chance still persist their whole batch on completion.
-  if (!isReviewSession && !isPlanLearnSession && !isSecondChanceRetest) {
-    await persistOneCasualAnswer(currentCasualTestId, answerEntry);
+  if (isCasualFlow) {
+    casualAnswerRowId = await persistOneCasualAnswer(currentCasualTestId, answerEntry);
+  }
+  if (match.matchType==='unknown') {
+    const variantRow = await logUnknownVariant(w.id, input, match.normalizedStudent);
+    triggerAiJudgment(variantRow, w.id, w.term, w.def, input, normalizeAnswer(w.def), match.normalizedStudent,
+      isCasualFlow && casualAnswerRowId ? { answerRowId: casualAnswerRowId } : null); // fire-and-forget, not awaited
   }
   saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:rwAnswers.map(a=>({wordId:a.word.id,raw:a.raw,match:a.match})),testId:currentCasualTestId});
 }
