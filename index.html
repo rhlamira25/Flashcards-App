@@ -3522,21 +3522,24 @@ async function checkOutsideActivity(plan) {
   const detectedWords = pending.filter(p => detectedIds.has(p.word_id));
   outsideActivityWordIds = detectedWords.map(w => w.word_id);
 
-  const names = detectedWords.slice(0, 3).map(w => w.words?.term).filter(Boolean).join('، ');
-  const more = detectedWords.length > 3 ? ` و${detectedWords.length - 3} غيرها` : '';
-  document.getElementById('outside-activity-text').innerHTML =
-    `لاحظنا أنك خضت اختبار كتابة خارج الخطة على ${detectedWords.length} مصطلح لم تختبره الخطة بعد (${names}${more}). هل تريد اعتماد هذه النتائج ضمن الخطة؟`;
+  document.getElementById('outside-activity-text').textContent =
+    `لاحظنا أنك خضت اختبار كتابة خارج الخطة على ${detectedWords.length} مصطلح لم تختبره الخطة بعد. اختر أي منها تريد اعتماد نتيجته ضمن الخطة:`;
+  document.getElementById('outside-activity-list').innerHTML = detectedWords.map(w => `
+    <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:0.8rem;cursor:pointer;">
+      <input type="checkbox" class="outside-activity-cb" data-word-id="${w.word_id}" checked>
+      <span>${w.words?.term || ''}</span>
+    </label>`).join('');
   document.getElementById('outside-activity-overlay').classList.add('active');
 }
 
 async function acceptOutsideActivity() {
-  const ids = outsideActivityWordIds;
+  const ids = [...document.querySelectorAll('.outside-activity-cb:checked')].map(cb => parseInt(cb.dataset.wordId));
+  outsideActivityWordIds = [];
   document.getElementById('outside-activity-overlay').classList.remove('active');
-  if (!currentPlan || !ids.length) return;
+  if (!currentPlan || !ids.length) return; // nothing checked — same as declining, will ask again next visit
   const { error } = await db.from('plan_concepts').update({ status: 'learned', learned_at: new Date().toISOString() })
     .eq('plan_id', currentPlan.id).in('word_id', ids);
   if (error) { console.error('acceptOutsideActivity failed:', error); alert('تعذّر اعتماد النتائج، حاول مرة أخرى.'); return; }
-  outsideActivityWordIds = [];
   openReviewHub();
 }
 
@@ -4907,9 +4910,10 @@ function checkUrlAuthError() {
 <div class="kb-explainer-overlay" id="outside-activity-overlay">
   <div class="plan-change-box">
     <div style="font-weight:800;font-size:1.05rem;color:var(--text);margin-bottom:10px;">✍️ نشاط جديد خارج الخطة</div>
-    <div id="outside-activity-text" style="font-size:0.85rem;color:var(--text);line-height:1.8;margin-bottom:16px;"></div>
+    <div id="outside-activity-text" style="font-size:0.85rem;color:var(--text);line-height:1.8;margin-bottom:10px;"></div>
+    <div id="outside-activity-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:16px;"></div>
     <div style="display:flex;gap:8px;">
-      <button class="btn btn-primary" style="flex:1;" onclick="acceptOutsideActivity()">اعتماد النتائج</button>
+      <button class="btn btn-primary" style="flex:1;" onclick="acceptOutsideActivity()">اعتماد المحدد</button>
       <button class="btn btn-ghost" style="flex:1;" onclick="declineOutsideActivity()">تجاهل الآن</button>
     </div>
   </div>
