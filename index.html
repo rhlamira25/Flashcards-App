@@ -3513,7 +3513,7 @@ function startPlanLearnSession() {
 // evidence of a casual/review-hub test taken outside the plan. No extra provenance tracking needed.
 let outsideActivityWordIds = [];
 async function checkOutsideActivity(plan) {
-  const { data: pending } = await db.from('plan_concepts').select('word_id, words(term)').eq('plan_id', plan.id).eq('status', 'pending');
+  const { data: pending } = await db.from('plan_concepts').select('word_id, words(term)').eq('plan_id', plan.id).eq('status', 'pending').eq('outside_activity_declined', false);
   if (!pending || !pending.length) return;
   const pendingIds = pending.map(p => p.word_id);
   const { data: prog } = await db.from('concept_progress').select('word_id').eq('user_id', currentUser.id).in('word_id', pendingIds);
@@ -3523,7 +3523,7 @@ async function checkOutsideActivity(plan) {
   outsideActivityWordIds = detectedWords.map(w => w.word_id);
 
   document.getElementById('outside-activity-text').textContent =
-    `لاحظنا أنك خضت اختبار كتابة خارج الخطة على ${detectedWords.length} مصطلح لم تختبره الخطة بعد. اختر أي منها تريد اعتماد نتيجته ضمن الخطة:`;
+    `لاحظنا أنك خضت اختبار كتابة خارج الخطة على ${detectedWords.length} مصطلح لم تختبره الخطة بعد. اختر أي منها تريد اعتماد نتيجته ضمن الخطة (إلغاء التحديد يعني استبعاده نهائياً):`;
   document.getElementById('outside-activity-list').innerHTML = detectedWords.map(w => `
     <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:0.8rem;cursor:pointer;">
       <input type="checkbox" class="outside-activity-cb" data-word-id="${w.word_id}" checked>
@@ -3533,13 +3533,25 @@ async function checkOutsideActivity(plan) {
 }
 
 async function acceptOutsideActivity() {
-  const ids = [...document.querySelectorAll('.outside-activity-cb:checked')].map(cb => parseInt(cb.dataset.wordId));
+  const allIds = [...document.querySelectorAll('.outside-activity-cb')].map(cb => parseInt(cb.dataset.wordId));
+  const acceptIds = [...document.querySelectorAll('.outside-activity-cb:checked')].map(cb => parseInt(cb.dataset.wordId));
+  const declineIds = allIds.filter(id => !acceptIds.includes(id));
   outsideActivityWordIds = [];
   document.getElementById('outside-activity-overlay').classList.remove('active');
-  if (!currentPlan || !ids.length) return; // nothing checked — same as declining, will ask again next visit
-  const { error } = await db.from('plan_concepts').update({ status: 'learned', learned_at: new Date().toISOString() })
-    .eq('plan_id', currentPlan.id).in('word_id', ids);
-  if (error) { console.error('acceptOutsideActivity failed:', error); alert('تعذّر اعتماد النتائج، حاول مرة أخرى.'); return; }
+  if (!currentPlan) return;
+  if (acceptIds.length) {
+    const { error } = await db.from('plan_concepts').update({ status: 'learned', learned_at: new Date().toISOString() })
+      .eq('plan_id', currentPlan.id).in('word_id', acceptIds);
+    if (error) { console.error('acceptOutsideActivity failed:', error); alert('تعذّر اعتماد النتائج، حاول مرة أخرى.'); return; }
+  }
+  if (declineIds.length) {
+    // Unchecked + confirmed = permanent decline for these specific words, so they stop
+    // resurfacing in this popup. Unlike "ignore now" (which decides nothing), this is a
+    // deliberate per-word choice, so it's the one case that DOES need to persist.
+    const { error } = await db.from('plan_concepts').update({ outside_activity_declined: true })
+      .eq('plan_id', currentPlan.id).in('word_id', declineIds);
+    if (error) console.error('acceptOutsideActivity decline-flag failed:', error);
+  }
   openReviewHub();
 }
 
