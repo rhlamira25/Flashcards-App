@@ -348,6 +348,12 @@
   .kb-bottom-row { margin-top: 4px; }
   .kb-wide { flex: 1.4; }
   .kb-space { flex: 3; }
+  /* Shared write-error toast (item 7) — one consistent recovery UI for every failed save. */
+  #toast-container { position:fixed; bottom:16px; left:0; right:0; z-index:1200; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; padding:0 16px; }
+  .toast-banner { pointer-events:auto; background:var(--wrong-bg, #fdecea); border:1px solid var(--wrong-border, #f5b8b0); color:var(--wrong-text, #8a2c22); border-radius:12px; padding:10px 14px; font-size:0.82rem; line-height:1.6; max-width:420px; width:100%; display:flex; align-items:center; gap:10px; box-shadow:0 4px 14px rgba(0,0,0,0.15); animation: toast-in 0.2s ease-out; }
+  .toast-banner .toast-msg { flex:1; }
+  .toast-banner button { background:none; border:1px solid currentColor; border-radius:8px; padding:4px 10px; font-size:0.78rem; color:inherit; cursor:pointer; white-space:nowrap; }
+  @keyframes toast-in { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
   .kb-enter { background: var(--accent-dim); border-color: var(--accent-border); color: var(--accent); font-weight: 700; }
   .rw-feedback { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; margin-top: 14px; }
   .feedback-label { font-size: 0.76rem; color: var(--text-sub); margin-bottom: 2px; }
@@ -948,6 +954,7 @@ select.form-input{appearance:auto;}
 
 </head>
 <body>
+<div id="toast-container"></div>
 
 <!-- ══ PAGE: LOADING ══ -->
 <div id="pg-loading" class="page active">
@@ -1602,6 +1609,42 @@ function showSuccess(id, msg) {
   const el = document.getElementById(id);
   el.textContent = msg; el.style.display = 'block';
   setTimeout(() => el.style.display = 'none', 4000);
+}
+
+// ── item 7 (error/recovery behavior): one shared toast + one shared wrapper for every DB write ──
+// Replaces the scattered alert()-based patches from the earlier Tier A pass with a single
+// consistent recovery UI, and gives every remaining unguarded write (previously silent on
+// failure) at least console logging + a non-blocking user-facing notice by default.
+function showErrorToast(message, retryFn) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast-banner';
+  const msgSpan = document.createElement('span');
+  msgSpan.className = 'toast-msg';
+  msgSpan.textContent = message;
+  toast.appendChild(msgSpan);
+  if (retryFn) {
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = 'إعادة المحاولة';
+    retryBtn.onclick = () => { toast.remove(); retryFn(); };
+    toast.appendChild(retryBtn);
+  }
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), retryFn ? 8000 : 4500);
+}
+
+// Wraps a Supabase query promise: logs any error with context, and — unless silent — shows a
+// toast. Callers still receive {data, error} and decide their own control flow (bail out,
+// roll back, etc.) exactly as before; this only removes the boilerplate of deciding how to
+// surface the failure. Default message is generic and safe for any write; pass a specific one
+// where the context calls for it.
+async function dbWrite(queryPromise, { context = '', silent = false, message = 'تعذّر حفظ التغييرات. تحقق من اتصالك وحاول مرة أخرى.', retryFn = null } = {}) {
+  const result = await queryPromise;
+  if (result.error) {
+    console.error(`dbWrite failed${context ? ' (' + context + ')' : ''}:`, result.error);
+    if (!silent) showErrorToast(message, retryFn);
+  }
+  return result;
 }
 
 function switchTab(tab) {
@@ -2344,13 +2387,13 @@ async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
     const { data: existing } = await db.from('unknown_variants').select('*')
       .eq('word_id', wordId).eq('normalized_variant', normalizedAnswer);
     if (existing && existing.length > 0) {
-      await db.from('unknown_variants').update({ occurrence_count: existing[0].occurrence_count + 1 }).eq('id', existing[0].id);
+      await dbWrite(db.from('unknown_variants').update({ occurrence_count: existing[0].occurrence_count + 1 }).eq('id', existing[0].id), { context: 'logUnknownVariant increment', silent: true });
       return existing[0]; // already judged (or being judged) — caller skips re-triggering the AI
     } else {
-      const { data: inserted } = await db.from('unknown_variants').insert({
+      const { data: inserted } = await dbWrite(db.from('unknown_variants').insert({
         word_id: wordId, submitted_variant: rawAnswer, normalized_variant: normalizedAnswer,
         occurrence_count: 1, status: 'pending'
-      }).select();
+      }).select(), { context: 'logUnknownVariant insert', silent: true });
       return inserted && inserted[0] ? inserted[0] : null;
     }
   } catch (e) { console.error('logUnknownVariant failed:', e); return null; }
@@ -2374,22 +2417,22 @@ async function triggerAiJudgment(variantRow, wordId, term, expectedAnswer, rawSt
     const result = await res.json().catch(() => null);
     if (!res.ok || !result || !result.success) { console.error('triggerAiJudgment failed:', result); return; }
 
-    await db.from('unknown_variants').update({
+    await dbWrite(db.from('unknown_variants').update({
       ai_verdict: result.verdict, ai_reasoning: result.reasoning || null, ai_checked_at: new Date().toISOString(),
       ai_word_pairs: result.wordPairs && result.wordPairs.length ? result.wordPairs : null
-    }).eq('id', variantRow.id);
+    }).eq('id', variantRow.id), { context: 'triggerAiJudgment record verdict', silent: true });
 
     if (!applyCtx) return; // holistic-only or non-casual context — leave scoring to the admin's eventual decision
     const score = typeof result.score === 'number' ? result.score : (result.verdict === 'accept' ? 100 : null);
     if (score === null) return; // 'reject'/'uncertain' with no numeric score — keep the original raw fuzzy score as-is
 
     if (applyCtx.answerRowId) {
-      await db.from('rewrite_test_answers').update({ score }).eq('id', applyCtx.answerRowId);
+      await dbWrite(db.from('rewrite_test_answers').update({ score }).eq('id', applyCtx.answerRowId), { context: 'triggerAiJudgment apply score', silent: true });
     }
     const { data: existingProg } = await db.from('concept_progress').select('*').eq('user_id', currentUser.id).eq('word_id', wordId);
     if (existingProg && existingProg.length) {
       const level = classifyProficiency(score);
-      await db.from('concept_progress').update({ current_proficiency: score, proficiency_level: level.key }).eq('id', existingProg[0].id);
+      await dbWrite(db.from('concept_progress').update({ current_proficiency: score, proficiency_level: level.key }).eq('id', existingProg[0].id), { context: 'triggerAiJudgment update concept_progress', silent: true });
     }
   } catch (e) { console.error('triggerAiJudgment failed:', e); }
 }
@@ -2421,16 +2464,16 @@ async function persistOneCasualAnswer(testId, a) {
     const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
     const nextReviewAt = addDaysStr(todayStr(), interval);
     if (!isFirstEver) {
-      await db.from('concept_progress').update({
+      await dbWrite(db.from('concept_progress').update({
         current_proficiency: a.match.score, proficiency_level: level.key, last_tested_at: new Date().toISOString(),
         next_review_at: nextReviewAt, current_interval: interval
-      }).eq('id', existingProg[0].id);
+      }).eq('id', existingProg[0].id), { context: 'persistOneCasualAnswer update concept_progress', message: 'تم حفظ الإجابة لكن تعذّر تحديث موعد المراجعة القادم.' });
     } else {
-      await db.from('concept_progress').insert({
+      await dbWrite(db.from('concept_progress').insert({
         user_id: currentUser.id, word_id: a.word.id, current_proficiency: a.match.score,
         proficiency_level: level.key, last_tested_at: new Date().toISOString(),
         next_review_at: nextReviewAt, current_interval: interval
-      });
+      }), { context: 'persistOneCasualAnswer insert concept_progress', message: 'تم حفظ الإجابة لكن تعذّر تحديث موعد المراجعة القادم.' });
     }
     return inserted && inserted[0] ? inserted[0].id : null;
   } catch (e) { console.error('persistOneCasualAnswer failed:', e); return null; }
@@ -2461,16 +2504,16 @@ async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
       const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
       const nextReviewAt = addDaysStr(todayStr(), interval);
       if (!isFirstEver) {
-        await db.from('concept_progress').update({
+        await dbWrite(db.from('concept_progress').update({
           current_proficiency: a.match.score, proficiency_level: level.key, last_tested_at: new Date().toISOString(),
           next_review_at: nextReviewAt, current_interval: interval
-        }).eq('id', existingProg[0].id);
+        }).eq('id', existingProg[0].id), { context: 'persistRewriteTest update concept_progress', silent: true }); // batch loop — one toast per test, not per word
       } else {
-        await db.from('concept_progress').insert({
+        await dbWrite(db.from('concept_progress').insert({
           user_id: currentUser.id, word_id: a.word.id, current_proficiency: a.match.score,
           proficiency_level: level.key, last_tested_at: new Date().toISOString(),
           next_review_at: nextReviewAt, current_interval: interval
-        });
+        }), { context: 'persistRewriteTest insert concept_progress', silent: true });
       }
     }
     return true;
@@ -2671,7 +2714,8 @@ async function reconcileMissedPlanSessions(plan) {
   if (!placements.length) return null;
 
   for (const p of placements) {
-    await db.from('plan_concepts').update({ scheduled_date: p.date, session_number: p.sessionNumber }).eq('id', p.item.id);
+    await dbWrite(db.from('plan_concepts').update({ scheduled_date: p.date, session_number: p.sessionNumber }).eq('id', p.item.id),
+      { context: 'reconcileMissedPlanSessions placement', silent: true }); // one toast per whole reconciliation would be noisy across a loop; logged for diagnosis
   }
 
   const moved = placements.map(p => ({ term: p.item.words?.term || '', newDate: p.date }));
@@ -2762,7 +2806,8 @@ async function reconcileMissedReviews() {
     const dayOffset = Math.floor(i / REVIEW_SOFT_TARGET) + 1; // next REVIEW_SOFT_TARGET-sized chunk lands tomorrow, then the day after, etc.
     const newDate = addDaysStr(today, dayOffset);
     const row = overflow[i];
-    await db.from('concept_progress').update({ next_review_at: newDate }).eq('id', row.id);
+    await dbWrite(db.from('concept_progress').update({ next_review_at: newDate }).eq('id', row.id),
+      { context: 'reconcileMissedReviews placement', silent: true });
     newSchedule[newDate] = (newSchedule[newDate] || 0) + 1;
     moved.push({ term: row.words?.term || '', newDate });
   }
@@ -2817,7 +2862,7 @@ async function refreshPlanStatus() {
   } else if (allPending && allPending.length === 0) {
     learnBtn.style.display = 'none';
     infoLine.textContent = `🎉 أنهيت كل المصطلحات الجديدة في هذه الخطة (${learnedCount}/${totalCount}) — بقيت المراجعات فقط`;
-    if (plan.status === 'active') await db.from('study_plans').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', plan.id);
+    if (plan.status === 'active') await dbWrite(db.from('study_plans').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', plan.id), { context: 'auto-complete plan', silent: true });
   } else {
     learnBtn.style.display = 'none';
     const { data: nextBatch } = await db.from('plan_concepts').select('scheduled_date').eq('plan_id', plan.id).eq('status', 'pending').order('scheduled_date').limit(1);
@@ -3042,7 +3087,7 @@ async function renderPlanTargetOptions() {
       };
     });
     const rows = defaults.map(d => ({ ...d, user_id: currentUser.id }));
-    const { data: inserted } = await db.from('exams').insert(rows).select();
+    const { data: inserted } = await dbWrite(db.from('exams').insert(rows).select(), { context: 'seed default exams', message: 'تعذّر تحميل مواعيد الامتحانات، حاول تحديث الصفحة.' });
     exams = inserted || [];
   }
   const listEl = document.getElementById('ps-exam-list');
@@ -3356,12 +3401,12 @@ async function triggerComponentGeneration(wordIds) {
 // student's choice to focus solely on the active plan's scope (or not).
 async function applyPauseState(scopeWordIds, pauseOthers) {
   if (pauseOthers && scopeWordIds.length > 0) {
-    await db.from('concept_progress').update({ is_paused: true })
-      .eq('user_id', currentUser.id).not('word_id', 'in', `(${scopeWordIds.join(',')})`);
-    await db.from('concept_progress').update({ is_paused: false })
-      .eq('user_id', currentUser.id).in('word_id', scopeWordIds);
+    await dbWrite(db.from('concept_progress').update({ is_paused: true })
+      .eq('user_id', currentUser.id).not('word_id', 'in', `(${scopeWordIds.join(',')})`), { context: 'applyPauseState pause others' });
+    await dbWrite(db.from('concept_progress').update({ is_paused: false })
+      .eq('user_id', currentUser.id).in('word_id', scopeWordIds), { context: 'applyPauseState unpause scope' });
   } else {
-    await db.from('concept_progress').update({ is_paused: false }).eq('user_id', currentUser.id);
+    await dbWrite(db.from('concept_progress').update({ is_paused: false }).eq('user_id', currentUser.id), { context: 'applyPauseState unpause all' });
   }
 }
 
@@ -3426,7 +3471,7 @@ async function savePlanEdits(planId, keepProgress) {
     if (planDraft.contentTypes.length > 1) {
       localStorage.setItem(`plan-order-explained-${planId}`, 'pending');
       localStorage.setItem(`plan-order-info-${planId}`, JSON.stringify({ mode: planDraft.categoryOrderMode, order: categoryOrder }));
-      await db.from('study_plans').update({ category_order: categoryOrder }).eq('id', planId);
+      await dbWrite(db.from('study_plans').update({ category_order: categoryOrder }).eq('id', planId), { context: 'savePlanEdits category_order (rebuild)', silent: true });
     }
   } else {
     // Keep already-learned concepts untouched; reschedule/add the rest to fit the edited plan
@@ -3438,7 +3483,7 @@ async function savePlanEdits(planId, keepProgress) {
 
     // Drop rows no longer in scope — but never touch learned ones, their history stays regardless
     const toRemove = (existingRows||[]).filter(r => r.status!=='learned' && !newPoolIds.has(r.word_id) && !carryForwardIds.has(r.word_id));
-    if (toRemove.length) await db.from('plan_concepts').delete().in('id', toRemove.map(r=>r.id));
+    if (toRemove.length) await dbWrite(db.from('plan_concepts').delete().in('id', toRemove.map(r=>r.id)), { context: 'savePlanEdits remove out-of-scope', message: 'تعذّر إزالة بعض المصطلحات من الخطة.' });
 
     // Reschedule everything still needed (new + previously-pending, minus anything already learned)
     const stillNeededPool = planDraft.newConceptsForSchedule.filter(w => !learnedIds.has(w.id));
@@ -3455,12 +3500,12 @@ async function savePlanEdits(planId, keepProgress) {
     }
     if (planDraft.contentTypes.length > 1) {
       localStorage.setItem(`plan-order-info-${planId}`, JSON.stringify({ mode: planDraft.categoryOrderMode, order: categoryOrder }));
-      await db.from('study_plans').update({ category_order: categoryOrder }).eq('id', planId);
+      await dbWrite(db.from('study_plans').update({ category_order: categoryOrder }).eq('id', planId), { context: 'savePlanEdits category_order (keepProgress)', silent: true });
       if (!localStorage.getItem(`plan-order-explained-${planId}`)) localStorage.setItem(`plan-order-explained-${planId}`, 'pending');
     }
 
     const newCarryForward = [...carryForwardIds].filter(id => !existingWordIds.has(id));
-    if (newCarryForward.length) await db.from('plan_concepts').insert(newCarryForward.map(id => ({ plan_id: planId, word_id: id, session_number: 0, scheduled_date: today, status: 'learned', learned_at: new Date().toISOString() })));
+    if (newCarryForward.length) await dbWrite(db.from('plan_concepts').insert(newCarryForward.map(id => ({ plan_id: planId, word_id: id, session_number: 0, scheduled_date: today, status: 'learned', learned_at: new Date().toISOString() }))), { context: 'savePlanEdits new carry-forward', message: 'تعذّر اعتماد بعض المصطلحات المُعتمدة مسبقاً.' });
   }
 
   // "Start anew" words: previously tested but NOT carried forward — full reset (untested
@@ -3879,9 +3924,9 @@ async function persistComponentProgress(componentId, score) {
   try {
     const { data: existing } = await db.from('component_progress').select('id').eq('user_id', currentUser.id).eq('component_id', componentId);
     if (existing && existing.length) {
-      await db.from('component_progress').update({ current_proficiency: score, last_tested_at: new Date().toISOString() }).eq('id', existing[0].id);
+      await dbWrite(db.from('component_progress').update({ current_proficiency: score, last_tested_at: new Date().toISOString() }).eq('id', existing[0].id), { context: 'persistComponentProgress update', silent: true });
     } else {
-      await db.from('component_progress').insert({ user_id: currentUser.id, component_id: componentId, current_proficiency: score, last_tested_at: new Date().toISOString() });
+      await dbWrite(db.from('component_progress').insert({ user_id: currentUser.id, component_id: componentId, current_proficiency: score, last_tested_at: new Date().toISOString() }), { context: 'persistComponentProgress insert', silent: true });
     }
   } catch (e) { console.error('persistComponentProgress failed:', e); }
 }
@@ -4239,15 +4284,15 @@ async function classifyDiffSegment(wordId, expectedFullTokens, seg) {
       .eq('word_id', wordId).eq('normalized_expected_phrase', normExp).eq('normalized_student_phrase', normStu);
     if (existing && existing.length > 0) {
       const row = existing[0];
-      await db.from('word_synonym_pairs').update({ occurrence_count: row.occurrence_count + 1 }).eq('id', row.id);
+      await dbWrite(db.from('word_synonym_pairs').update({ occurrence_count: row.occurrence_count + 1 }).eq('id', row.id), { context: 'word_synonym_pairs increment', silent: true });
       if (row.status === 'approved') return { color: 'correct', explanation: null, expPhrase, stuPhrase };
       if (row.status === 'rejected') return { color: 'wrong', explanation: `🔴 "${stuPhrase}"\nالمتوقع: "${expPhrase}"`, expPhrase, stuPhrase };
       // still pending — fall through to best-guess below
     } else {
-      await db.from('word_synonym_pairs').insert({
+      await dbWrite(db.from('word_synonym_pairs').insert({
         word_id: wordId, expected_phrase: expPhrase, normalized_expected_phrase: normExp,
         student_phrase: stuPhrase, normalized_student_phrase: normStu, status: 'pending', occurrence_count: 1
-      });
+      }), { context: 'word_synonym_pairs log new', silent: true });
     }
   } catch (e) { console.error('classifyDiffSegment lookup failed:', e); }
 
@@ -4564,20 +4609,20 @@ function downgradeLevelKey(levelKey) {
 
 async function persistSecondChanceRetest(answers, initialScores) {
   try {
-    const { data: testRows } = await db.from('rewrite_tests').insert({
+    const { data: testRows } = await dbWrite(db.from('rewrite_tests').insert({
       user_id: currentUser.id, subject: 'review_retest', group_number: null,
       submitted_at: new Date().toISOString(), overall_score: Math.round(answers.reduce((s,a)=>s+a.match.score,0)/answers.length)
-    }).select();
+    }).select(), { context: 'persistSecondChanceRetest test row', silent: true });
     const testId = testRows && testRows[0] ? testRows[0].id : null;
 
     for (const a of answers) {
       if (testId) {
-        await db.from('rewrite_test_answers').insert({
+        await dbWrite(db.from('rewrite_test_answers').insert({
           test_id: testId, word_id: a.word.id, raw_student_answer: a.raw,
           normalized_student_answer: a.match.normalizedStudent, match_type: a.match.matchType,
           similarity_score: a.match.similarity, score: a.match.score,
           is_second_chance_retest: true, initial_score_before_retest: initialScores[a.word.id] ?? null
-        });
+        }), { context: 'persistSecondChanceRetest answer', silent: true });
       }
 
       // Conservative update: real level from the retest score, downgraded one
@@ -4590,10 +4635,10 @@ async function persistSecondChanceRetest(answers, initialScores) {
 
       const { data: existingProg } = await db.from('concept_progress').select('id').eq('user_id', currentUser.id).eq('word_id', a.word.id);
       if (existingProg && existingProg.length) {
-        await db.from('concept_progress').update({
+        await dbWrite(db.from('concept_progress').update({
           current_proficiency: a.match.score, proficiency_level: realLevel.key,
           last_tested_at: new Date().toISOString(), next_review_at: nextReviewAt, current_interval: interval
-        }).eq('id', existingProg[0].id);
+        }).eq('id', existingProg[0].id), { context: 'persistSecondChanceRetest concept_progress', silent: true });
       }
     }
   } catch (e) { console.error('persistSecondChanceRetest failed:', e); }
@@ -4811,14 +4856,15 @@ async function saveProfile() {
   const btn = document.getElementById('profile-btn');
   btn.disabled = true; btn.textContent = '...جاري الحفظ';
 
-  await db.from('profiles').update({
+  const { error: profileSaveErr } = await dbWrite(db.from('profiles').update({
     first_name: firstName,
     last_name: lastName,
     date_of_birth: dob || null,
     student_type: studentType || null
-  }).eq('email', currentUser.email);
+  }).eq('email', currentUser.email), { context: 'saveProfile', message: 'تعذّر حفظ معلوماتك، حاول مرة أخرى.' });
 
   btn.disabled = false; btn.textContent = 'حفظ وإكمال ←';
+  if (profileSaveErr) return; // stay on the form instead of proceeding as if it saved
   showPage('pending');
 }
 
