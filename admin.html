@@ -1101,6 +1101,15 @@ let selectedUserEmail = null;
 let selectedRenewEmail = null;
 let selectedRenewDuration = null;
 
+// Escapes text before interpolating it into innerHTML — required for any student-submitted or
+// otherwise untrusted free-text field, since this app renders directly into the admin's own
+// authenticated session (unlike a student's own view of their own data, an XSS here would run
+// with full admin DB access).
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
 function showPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('pg-' + id).classList.add('active');
@@ -1256,7 +1265,7 @@ function renderUsers(users) {
       <div class="user-card">
         <div class="user-card-top">
           <div>
-            <div class="user-email">${u.email}</div>
+            <div class="user-email">${escapeHtml(u.email)}</div>
             <div style="font-size:0.8rem;color:var(--gold-text);margin-top:2px;font-weight:700;">${fullName}</div>
             <div style="font-size:0.72rem;color:var(--text-faint);margin-top:2px;">${studentType} · م: ${dob} · تسجيل: ${date}</div>
           </div>
@@ -1571,10 +1580,10 @@ function renderSubstitutionsList(rows) {
   if (!rows.length) { listEl.innerHTML = '<div class="empty-state"><div class="empty-icon">✅</div>لا توجد استبدالات بانتظار المراجعة</div>'; return; }
   listEl.innerHTML = rows.map(r => `
     <div class="review-card">
-      <div class="review-term">${r.words?.term || 'مصطلح محذوف'}<span class="review-count">×${r.occurrence_count}</span></div>
+      <div class="review-term">${escapeHtml(r.words?.term) || 'مصطلح محذوف'}<span class="review-count">×${r.occurrence_count}</span></div>
       <div class="review-compare">
-        <div class="review-expected"><strong>المتوقع: </strong>${r.expected_phrase}</div>
-        <div class="review-student"><strong>إجابة الطالب: </strong>${r.student_phrase}</div>
+        <div class="review-expected"><strong>المتوقع: </strong>${escapeHtml(r.expected_phrase)}</div>
+        <div class="review-student"><strong>إجابة الطالب: </strong>${escapeHtml(r.student_phrase)}</div>
       </div>
       <div class="review-actions">
         <button class="btn-approve" onclick="approveSubstitution(${r.id})">✅ اعتماد كمرادف (يظهر أخضر)</button>
@@ -1605,15 +1614,15 @@ function renderUnknownVariantsList(rows) {
   const verdictLabel = { accept: '✅ اعتماد', reject: '❌ رفض', partial: '🟡 جزئي', uncertain: '❔ غير متأكد' };
   listEl.innerHTML = rows.map(r => `
     <div class="review-card">
-      <div class="review-term">${r.words?.term || 'مصطلح محذوف'}<span class="review-count">×${r.occurrence_count}</span></div>
+      <div class="review-term">${escapeHtml(r.words?.term) || 'مصطلح محذوف'}<span class="review-count">×${r.occurrence_count}</span></div>
       <div class="review-compare">
-        <div class="review-expected"><strong>التعريف الأصلي: </strong>${r.words?.definition || ''}</div>
-        <div class="review-student"><strong>إجابة الطالب: </strong>${r.submitted_variant}</div>
+        <div class="review-expected"><strong>التعريف الأصلي: </strong>${escapeHtml(r.words?.definition)}</div>
+        <div class="review-student"><strong>إجابة الطالب: </strong>${escapeHtml(r.submitted_variant)}</div>
       </div>
       ${r.ai_verdict ? `
       <div style="background:var(--accent-dim, #f5f0e6);border:1px solid var(--accent-border, #e0d5c0);border-radius:8px;padding:8px 10px;margin:8px 0;font-size:0.8rem;line-height:1.6;">
-        <strong>🤖 اقتراح الذكاء الاصطناعي: ${verdictLabel[r.ai_verdict] || r.ai_verdict}</strong>
-        ${r.ai_reasoning ? `<div style="color:#666;margin-top:3px;">${r.ai_reasoning}</div>` : ''}
+        <strong>🤖 اقتراح الذكاء الاصطناعي: ${verdictLabel[r.ai_verdict] || escapeHtml(r.ai_verdict)}</strong>
+        ${r.ai_reasoning ? `<div style="color:#666;margin-top:3px;">${escapeHtml(r.ai_reasoning)}</div>` : ''}
       </div>` : ''}
       <div class="review-actions">
         <button class="btn-approve" onclick="approveVariant(${r.id}, ${r.word_id})">✅ اعتماد كإجابة صحيحة</button>
