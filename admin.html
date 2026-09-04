@@ -1121,6 +1121,20 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 3000);
 }
 
+// Wraps a Supabase query/RPC promise: logs any error with context and shows it via the
+// existing toast, unless silent. Callers still get {data, error} back and decide their own
+// control flow (bail out, skip a follow-up step, etc.) — this only removes the boilerplate
+// of deciding how to surface a failure, and stops "success" UI from showing after a write
+// that actually failed.
+async function dbWrite(queryPromise, { context = '', silent = false, message = 'تعذّر تنفيذ العملية. حاول مرة أخرى.' } = {}) {
+  const result = await queryPromise;
+  if (result.error) {
+    console.error(`dbWrite failed${context ? ' (' + context + ')' : ''}:`, result.error);
+    if (!silent) showToast('⚠️ ' + message);
+  }
+  return result;
+}
+
 // ── AUTH ──
 async function adminLogin() {
   const email = document.getElementById('admin-email').value.trim();
@@ -1300,20 +1314,12 @@ function selectDuration(months) {
 
 async function confirmApprove() {
   if (!selectedUserEmail || !selectedDuration) return;
-  const expiry = new Date();
-  expiry.setMonth(expiry.getMonth() + selectedDuration);
 
-  // Generate a unique key
-  const key = 'KEY-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-
-  await db.from('profiles').update({
-    is_approved: true,
-    expiry_date: expiry.toISOString(),
-    access_key: key
-  }).eq('email', selectedUserEmail);
-
-  // Add key to access_keys table
-  await db.from('access_keys').insert({ key, is_used: true, used_by: selectedUserEmail });
+  const { data: result, error } = await dbWrite(
+    db.rpc('approve_user', { p_email: selectedUserEmail, p_months: selectedDuration }),
+    { context: 'confirmApprove', message: 'تعذّر تفعيل المستخدم، حاول مرة أخرى.' }
+  );
+  if (error || !result || !result.success) return;
 
   closeModal();
   showToast('✅ تم تفعيل المستخدم بنجاح!');
@@ -1353,7 +1359,8 @@ async function confirmApprove() {
 // ── REVOKE ──
 async function revokeUser(email) {
   if (!confirm('هل تريد إلغاء وصول هذا المستخدم؟')) return;
-  await db.from('profiles').update({ is_approved: false, expiry_date: null }).eq('email', email);
+  const { error } = await dbWrite(db.from('profiles').update({ is_approved: false, expiry_date: null }).eq('email', email), { context: 'revokeUser', message: 'تعذّر إلغاء وصول المستخدم، حاول مرة أخرى.' });
+  if (error) return;
   showToast('❌ تم إلغاء وصول المستخدم');
   await loadUsers();
 }
@@ -1409,7 +1416,8 @@ async function confirmRenew() {
   if (!selectedRenewEmail || !selectedRenewDuration) return;
   const expiry = new Date();
   expiry.setMonth(expiry.getMonth() + selectedRenewDuration);
-  await db.from('profiles').update({ is_approved: true, expiry_date: expiry.toISOString() }).eq('email', selectedRenewEmail);
+  const { error } = await dbWrite(db.from('profiles').update({ is_approved: true, expiry_date: expiry.toISOString() }).eq('email', selectedRenewEmail), { context: 'confirmRenew', message: 'تعذّر تجديد الاشتراك، حاول مرة أخرى.' });
+  if (error) return;
   closeRenewModal();
   showToast('🔄 تم تجديد الاشتراك بنجاح!');
   await loadUsers();
@@ -1446,7 +1454,8 @@ async function loadKeys() {
 async function generateKey() {
   const input = document.getElementById('new-key-input').value.trim();
   const key = input || 'KEY-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-  await db.from('access_keys').insert({ key, is_used: false, used_by: null });
+  const { error } = await dbWrite(db.from('access_keys').insert({ key, is_used: false, used_by: null }), { context: 'generateKey', message: 'تعذّر إنشاء المفتاح، حاول مرة أخرى.' });
+  if (error) return;
   document.getElementById('new-key-input').value = '';
   showToast('✅ تم إنشاء المفتاح: ' + key);
   await loadKeys();
@@ -1454,7 +1463,8 @@ async function generateKey() {
 
 async function deleteKey(key) {
   if (!confirm('حذف هذا المفتاح؟')) return;
-  await db.from('access_keys').delete().eq('key', key);
+  const { error } = await dbWrite(db.from('access_keys').delete().eq('key', key), { context: 'deleteKey', message: 'تعذّر حذف المفتاح، حاول مرة أخرى.' });
+  if (error) return;
   showToast('🗑️ تم حذف المفتاح');
   await loadKeys();
 }
@@ -1520,7 +1530,7 @@ async function loadExamDates() {
   const missing = EXAM_TYPE_DEFAULTS.filter(d => !byType[d.exam_type]);
   if (missing.length) {
     const seedRows = missing.map(d => ({ exam_type: d.exam_type, name: d.name, exam_date: null, date_status: 'provisional' }));
-    const { data: inserted } = await db.from('exam_official_dates').insert(seedRows).select();
+    const { data: inserted } = await dbWrite(db.from('exam_official_dates').insert(seedRows).select(), { context: 'seed exam_official_dates', silent: true });
     (inserted || []).forEach(r => byType[r.exam_type] = r);
   }
 
@@ -1553,9 +1563,15 @@ async function saveExamDate(examType) {
   if (!dateVal) { noteEl.textContent = '⚠️ أدخل تاريخاً أولاً'; noteEl.style.color = 'var(--wrong-text, #e05252)'; return; }
 
   const def = EXAM_TYPE_DEFAULTS.find(d => d.exam_type === examType);
-  await db.from('exam_official_dates').upsert({
+  const { error: upsertErr } = await dbWrite(db.from('exam_official_dates').upsert({
     exam_type: examType, name: def.name, exam_date: dateVal, date_status: statusVal, updated_at: new Date().toISOString()
-  }, { onConflict: 'exam_type' });
+  }, { onConflict: 'exam_type' }), { context: 'saveExamDate upsert', silent: true }); // shown via noteEl below instead of a toast
+  if (upsertErr) {
+    noteEl.style.color = 'var(--wrong-text, #e05252)';
+    noteEl.textContent = '⚠️ تعذّر حفظ التاريخ الرسمي';
+    setTimeout(() => { if (noteEl) noteEl.textContent = ''; }, 4000);
+    return;
+  }
 
   // Propagate to every student's own exams row of this type — including plans already
   // pointing at it. This does not retroactively change a plan's already-computed schedule
@@ -1592,11 +1608,13 @@ function renderSubstitutionsList(rows) {
     </div>`).join('');
 }
 async function approveSubstitution(id) {
-  await db.from('word_synonym_pairs').update({ status: 'approved', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await dbWrite(db.from('word_synonym_pairs').update({ status: 'approved', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id), { context: 'approveSubstitution', message: 'تعذّر اعتماد المرادف، حاول مرة أخرى.' });
+  if (error) return;
   loadSubstitutions(); refreshReviewBadge();
 }
 async function rejectSubstitution(id) {
-  await db.from('word_synonym_pairs').update({ status: 'rejected', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await dbWrite(db.from('word_synonym_pairs').update({ status: 'rejected', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id), { context: 'rejectSubstitution', message: 'تعذّر رفض المرادف، حاول مرة أخرى.' });
+  if (error) return;
   loadSubstitutions(); refreshReviewBadge();
 }
 
@@ -1631,28 +1649,13 @@ function renderUnknownVariantsList(rows) {
     </div>`).join('');
 }
 async function approveVariant(id, wordId) {
-  const { data: rows } = await db.from('unknown_variants').select('*').eq('id', id);
-  if (rows && rows.length) {
-    const r = rows[0];
-    await db.from('word_variants').insert({ word_id: wordId, variant_text: r.submitted_variant, source: 'admin' });
-    // Propose the AI-identified synonym pairs too, so future answers using the same word-level
-    // substitution match directly without needing another AI call (item 6).
-    if (Array.isArray(r.ai_word_pairs)) {
-      const acceptedPairs = r.ai_word_pairs.filter(p => p.isSynonym);
-      for (const p of acceptedPairs) {
-        await db.from('word_synonym_pairs').insert({
-          word_id: wordId, expected_phrase: p.expected, normalized_expected_phrase: p.expected,
-          student_phrase: p.student, normalized_student_phrase: p.student,
-          status: 'accepted', occurrence_count: 1, reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString()
-        });
-      }
-    }
-  }
-  await db.from('unknown_variants').update({ status: 'accepted', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await dbWrite(db.rpc('approve_unknown_variant', { p_id: id, p_word_id: wordId }), { context: 'approveVariant', message: 'تعذّر اعتماد الإجابة، حاول مرة أخرى.' });
+  if (error) return;
   loadUnknownVariants(); refreshReviewBadge();
 }
 async function rejectVariant(id) {
-  await db.from('unknown_variants').update({ status: 'rejected', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await dbWrite(db.from('unknown_variants').update({ status: 'rejected', reviewed_by: currentAdmin.email, reviewed_at: new Date().toISOString() }).eq('id', id), { context: 'rejectVariant', message: 'تعذّر رفض الإجابة، حاول مرة أخرى.' });
+  if (error) return;
   loadUnknownVariants(); refreshReviewBadge();
 }
 
@@ -1810,10 +1813,12 @@ async function saveWord() {
   btn.disabled = true;
 
   if (editingWordId) {
-    await db.from('words').update(wordData).eq('id', editingWordId);
+    const { error } = await dbWrite(db.from('words').update(wordData).eq('id', editingWordId), { context: 'saveWord update', message: 'تعذّر حفظ التعديلات، حاول مرة أخرى.' });
+    if (error) { btn.disabled = false; return; }
     showToast('✅ تم تعديل المصطلح بنجاح!');
   } else {
-    await db.from('words').insert(wordData);
+    const { error } = await dbWrite(db.from('words').insert(wordData), { context: 'saveWord insert', message: 'تعذّر إضافة المصطلح، حاول مرة أخرى.' });
+    if (error) { btn.disabled = false; return; }
     showToast('✅ تم إضافة المصطلح بنجاح!');
   }
 
@@ -1824,7 +1829,8 @@ async function saveWord() {
 
 async function deleteWord(id, term) {
   if (!confirm(`هل تريد حذف المصطلح "${term}"؟`)) return;
-  await db.from('words').delete().eq('id', id);
+  const { error } = await dbWrite(db.from('words').delete().eq('id', id), { context: 'deleteWord', message: 'تعذّر حذف المصطلح، حاول مرة أخرى.' });
+  if (error) return;
   showToast('🗑️ تم حذف المصطلح');
   await loadContentWords();
 }
@@ -1843,10 +1849,11 @@ async function renameGroup(groupNumber) {
   const currentLesson = grpWords[0].lesson || '';
   const newLesson = prompt('اسم الدرس (اتركه فارغاً للإبقاء على الحالي):', currentLesson);
 
-  await db.from('words').update({
+  const { error } = await dbWrite(db.from('words').update({
     group_name: newName,
     lesson: newLesson !== null ? newLesson : currentLesson
-  }).eq('subject', subject).eq('content_type', contentType).eq('trimester', trimester).eq('group_number', groupNumber);
+  }).eq('subject', subject).eq('content_type', contentType).eq('trimester', trimester).eq('group_number', groupNumber), { context: 'renameGroup', message: 'تعذّر تعديل المجموعة، حاول مرة أخرى.' });
+  if (error) return;
 
   showToast('✅ تم تعديل المجموعة');
   await loadContentWords();
@@ -1972,12 +1979,12 @@ async function saveComponents() {
 
   // Simplest safe approach for a small per-word list: replace all rows for
   // this word with the current edited state, preserving order and source.
-  await db.from('word_components').delete().eq('word_id', currentCompWordId);
   const rows = compRows.filter(c => c.question.trim() && c.answer.trim()).map((c, i) => ({
     word_id: currentCompWordId, question: c.question.trim(), answer: c.answer.trim(),
     semantic_role: c.semantic_role, color_role: c.color_role, order_index: i, source: c.source || 'manual'
   }));
-  if (rows.length) await db.from('word_components').insert(rows);
+  const { error } = await dbWrite(db.rpc('replace_word_components', { p_word_id: currentCompWordId, p_rows: rows }), { context: 'saveComponents', message: 'تعذّر حفظ المكونات، حاول مرة أخرى.' });
+  if (error) { btn.disabled = false; btn.textContent = '💾 حفظ'; return; }
 
   btn.disabled = false; btn.textContent = '💾 حفظ';
   showToast('✅ تم حفظ المكونات');
@@ -1992,7 +1999,8 @@ async function regenerateComponents() {
   try {
     const { data: { session } } = await db.auth.getSession();
     if (!session) { showToast('⚠️ الجلسة منتهية'); return; }
-    await db.from('word_components').delete().eq('word_id', currentCompWordId);
+    const { error: delErr } = await dbWrite(db.from('word_components').delete().eq('word_id', currentCompWordId), { context: 'regenerateComponents delete', silent: true });
+    if (delErr) { showToast('⚠️ تعذّر حذف المكونات القديمة، حاول مرة أخرى.'); return; }
     const res = await fetch(`${SUPABASE_URL}/functions/v1/rapid-service`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
