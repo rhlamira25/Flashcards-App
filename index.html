@@ -1789,42 +1789,18 @@ async function submitAccessKey() {
   const btn = document.getElementById('key-btn');
   btn.disabled = true; btn.textContent = '...جاري التحقق';
 
-  // Atomically redeem the key: the UPDATE itself is the check (is_used=false in the WHERE),
-  // so two students racing on the same key can't both succeed — only one UPDATE can match.
-  const { data: redeemed, error: redeemErr } = await db.from('access_keys')
-    .update({ is_used: true, used_by: currentUser.email })
-    .eq('key', key).eq('is_used', false)
-    .select();
+  // Atomic, server-side: validates the key, consumes it, and updates the profile in one
+  // transaction — the client never touches access_keys or the profile's privileged fields directly.
+  const { data: result, error: rpcErr } = await db.rpc('redeem_access_key', { key_input: key });
 
-  if (redeemErr) {
+  if (rpcErr) {
     btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
     showError('pending-error', 'تعذّر التحقق من المفتاح، حاول مرة أخرى');
     return;
   }
-  if (!redeemed || !redeemed.length) {
+  if (!result || !result.success) {
     btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
     showError('pending-error', 'المفتاح غير صحيح أو مستخدم مسبقاً');
-    return;
-  }
-
-  // Check if profile row exists
-  const { data: existingProfiles, error: profSelErr } = await db.from('profiles').select('*').eq('email', currentUser.email);
-  let profileErr = profSelErr;
-  if (!profileErr) {
-    if (existingProfiles && existingProfiles.length > 0) {
-      const { error } = await db.from('profiles').update({ is_approved: true, access_key: key }).eq('email', currentUser.email);
-      profileErr = error;
-    } else {
-      const { error } = await db.from('profiles').insert({ email: currentUser.email, is_approved: true, access_key: key });
-      profileErr = error;
-    }
-  }
-
-  if (profileErr) {
-    // The key is now burned but the profile write failed — surface this clearly rather than
-    // silently showing success, since this is a dead-end the student can't self-recover from.
-    btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
-    showError('pending-error', 'تم التحقق من المفتاح لكن تعذّر تفعيل حسابك. يرجى التواصل معنا.');
     return;
   }
 
@@ -2301,6 +2277,15 @@ function addDaysStr(baseStr, n) {
 }
 
 // Layer 1 — normalization. Conservative: only strips things that don't change meaning.
+// Escapes text before interpolating it into innerHTML — required anywhere content that isn't
+// pure student-typed-and-shown-to-themselves (self-XSS, not a real boundary) gets rendered:
+// specifically AI-generated component questions/answers, which are shown to EVERY student who
+// studies that word, not just whoever's session produced them.
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
 function normalizeAnswer(raw) {
   if (!raw) return '';
   let s = raw.trim();
@@ -2384,18 +2369,11 @@ function matchAnswer(studentRaw, expectedRaw, acceptedVariants) {
 // so the admin reviews each unique phrasing once (spec §10).
 async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
   try {
-    const { data: existing } = await db.from('unknown_variants').select('*')
-      .eq('word_id', wordId).eq('normalized_variant', normalizedAnswer);
-    if (existing && existing.length > 0) {
-      await dbWrite(db.from('unknown_variants').update({ occurrence_count: existing[0].occurrence_count + 1 }).eq('id', existing[0].id), { context: 'logUnknownVariant increment', silent: true });
-      return existing[0]; // already judged (or being judged) — caller skips re-triggering the AI
-    } else {
-      const { data: inserted } = await dbWrite(db.from('unknown_variants').insert({
-        word_id: wordId, submitted_variant: rawAnswer, normalized_variant: normalizedAnswer,
-        occurrence_count: 1, status: 'pending'
-      }).select(), { context: 'logUnknownVariant insert', silent: true });
-      return inserted && inserted[0] ? inserted[0] : null;
-    }
+    const { data, error } = await db.rpc('submit_unknown_variant', {
+      p_word_id: wordId, p_raw_answer: rawAnswer, p_normalized_answer: normalizedAnswer
+    });
+    if (error) { console.error('logUnknownVariant failed:', error); return null; }
+    return data;
   } catch (e) { console.error('logUnknownVariant failed:', e); return null; }
 }
 
@@ -2404,7 +2382,7 @@ async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
 // review queue. Only auto-corrects the interim score for the casual (outside-plan) flow, where
 // the just-submitted answer is already persisted per-word and its exact row is known; review/plan
 // answers still wait for the admin's manual decision to be retroactively corrected.
-async function triggerAiJudgment(variantRow, wordId, term, expectedAnswer, rawStudentAnswer, normalizedExpected, normalizedStudent, applyCtx) {
+async function triggerAiJudgment(variantRow, wordId, applyCtx) {
   if (!variantRow || variantRow.ai_checked_at) return; // already judged once — don't re-spend a Gemini call on a repeat
   try {
     const { data: { session } } = await db.auth.getSession();
@@ -2412,15 +2390,13 @@ async function triggerAiJudgment(variantRow, wordId, term, expectedAnswer, rawSt
     const res = await fetch(`${SUPABASE_URL}/functions/v1/judge-answer-variant`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ term, expectedAnswer, studentAnswer: rawStudentAnswer, normalizedExpected, normalizedStudent })
+      body: JSON.stringify({ variantId: variantRow.id })
     });
     const result = await res.json().catch(() => null);
     if (!res.ok || !result || !result.success) { console.error('triggerAiJudgment failed:', result); return; }
-
-    await dbWrite(db.from('unknown_variants').update({
-      ai_verdict: result.verdict, ai_reasoning: result.reasoning || null, ai_checked_at: new Date().toISOString(),
-      ai_word_pairs: result.wordPairs && result.wordPairs.length ? result.wordPairs : null
-    }).eq('id', variantRow.id), { context: 'triggerAiJudgment record verdict', silent: true });
+    // The function fetches the real word/answer content itself server-side and records
+    // ai_verdict/ai_reasoning/ai_word_pairs directly (via the service-role key) — the client
+    // never supplies judgment content and never writes unknown_variants at all.
 
     if (!applyCtx) return; // holistic-only or non-casual context — leave scoring to the admin's eventual decision
     const score = typeof result.score === 'number' ? result.score : (result.verdict === 'accept' ? 100 : null);
@@ -2450,71 +2426,44 @@ let currentCasualTestId = null;
 async function persistOneCasualAnswer(testId, a) {
   if (!testId) return null;
   try {
-    const { data: inserted, error: ansErr } = await db.from('rewrite_test_answers').insert({
-      test_id: testId, word_id: a.word.id, raw_student_answer: a.raw,
-      normalized_student_answer: a.match.normalizedStudent, match_type: a.match.matchType,
-      similarity_score: a.match.similarity, score: a.match.score
-    }).select();
-    if (ansErr) { console.error('persistOneCasualAnswer answer insert failed:', ansErr); return null; }
-
     const level = classifyProficiency(a.match.score);
-    const { data: existingProg } = await db.from('concept_progress').select('*')
+    const { data: existingProg } = await db.from('concept_progress').select('id')
       .eq('user_id', currentUser.id).eq('word_id', a.word.id);
     const isFirstEver = !existingProg || existingProg.length === 0;
     const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
     const nextReviewAt = addDaysStr(todayStr(), interval);
-    if (!isFirstEver) {
-      await dbWrite(db.from('concept_progress').update({
-        current_proficiency: a.match.score, proficiency_level: level.key, last_tested_at: new Date().toISOString(),
-        next_review_at: nextReviewAt, current_interval: interval
-      }).eq('id', existingProg[0].id), { context: 'persistOneCasualAnswer update concept_progress', message: 'تم حفظ الإجابة لكن تعذّر تحديث موعد المراجعة القادم.' });
-    } else {
-      await dbWrite(db.from('concept_progress').insert({
-        user_id: currentUser.id, word_id: a.word.id, current_proficiency: a.match.score,
-        proficiency_level: level.key, last_tested_at: new Date().toISOString(),
-        next_review_at: nextReviewAt, current_interval: interval
-      }), { context: 'persistOneCasualAnswer insert concept_progress', message: 'تم حفظ الإجابة لكن تعذّر تحديث موعد المراجعة القادم.' });
-    }
-    return inserted && inserted[0] ? inserted[0].id : null;
+
+    const { data: result, error } = await dbWrite(db.rpc('persist_answer_and_progress', {
+      p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
+      p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
+      p_proficiency_level: level.key, p_next_review_at: nextReviewAt, p_interval: interval
+    }), { context: 'persistOneCasualAnswer', message: 'تعذّر حفظ الإجابة، حاول مرة أخرى.' });
+    if (error || !result) return null;
+    return result.id;
   } catch (e) { console.error('persistOneCasualAnswer failed:', e); return null; }
 }
 
 async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
   try {
-    const { data: testRows, error: testErr } = await db.from('rewrite_tests').insert({
-      user_id: currentUser.id, subject, group_number: groupNumber === 'all' ? null : groupNumber,
-      submitted_at: new Date().toISOString(), overall_score: overallScore
-    }).select();
-    if (testErr || !testRows || !testRows.length) { console.error('persistRewriteTest insert failed:', testErr); return false; }
-    const testId = testRows[0].id;
-
-    const answerRows = answers.map(a => ({
-      test_id: testId, word_id: a.word.id, raw_student_answer: a.raw,
-      normalized_student_answer: a.match.normalizedStudent, match_type: a.match.matchType,
-      similarity_score: a.match.similarity, score: a.match.score
-    }));
-    const { error: ansErr } = await db.from('rewrite_test_answers').insert(answerRows);
-    if (ansErr) { console.error('persistRewriteTest answers insert failed:', ansErr); return false; }
+    const { data: testId, error: testErr } = await db.rpc('create_rewrite_test', {
+      p_subject: subject, p_group_number: groupNumber === 'all' ? null : groupNumber,
+      p_word_ids: answers.map(a => a.word.id),
+      p_submitted_at: new Date().toISOString(), p_overall_score: overallScore
+    });
+    if (testErr || !testId) { console.error('persistRewriteTest create_rewrite_test failed:', testErr); return false; }
 
     for (const a of answers) {
       const level = classifyProficiency(a.match.score);
-      const { data: existingProg } = await db.from('concept_progress').select('*')
+      const { data: existingProg } = await db.from('concept_progress').select('id')
         .eq('user_id', currentUser.id).eq('word_id', a.word.id);
       const isFirstEver = !existingProg || existingProg.length === 0;
       const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
       const nextReviewAt = addDaysStr(todayStr(), interval);
-      if (!isFirstEver) {
-        await dbWrite(db.from('concept_progress').update({
-          current_proficiency: a.match.score, proficiency_level: level.key, last_tested_at: new Date().toISOString(),
-          next_review_at: nextReviewAt, current_interval: interval
-        }).eq('id', existingProg[0].id), { context: 'persistRewriteTest update concept_progress', silent: true }); // batch loop — one toast per test, not per word
-      } else {
-        await dbWrite(db.from('concept_progress').insert({
-          user_id: currentUser.id, word_id: a.word.id, current_proficiency: a.match.score,
-          proficiency_level: level.key, last_tested_at: new Date().toISOString(),
-          next_review_at: nextReviewAt, current_interval: interval
-        }), { context: 'persistRewriteTest insert concept_progress', silent: true });
-      }
+      await dbWrite(db.rpc('persist_answer_and_progress', {
+        p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
+        p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
+        p_proficiency_level: level.key, p_next_review_at: nextReviewAt, p_interval: interval
+      }), { context: 'persistRewriteTest answer+progress', silent: true }); // batch loop — one toast per test, not per word
     }
     return true;
   } catch (e) { console.error('persistRewriteTest failed:', e); return false; }
@@ -2613,7 +2562,7 @@ async function loadPriorities(dueRows) {
   listEl.innerHTML = scored.map(s => {
     const level = classifyProficiency(s.row.current_proficiency || 0);
     return `<div style="display:flex;justify-content:space-between;align-items:center;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;padding:9px 12px;font-size:0.85rem;">
-      <span>${level.emoji} ${s.word.term}</span>
+      <span>${level.emoji} ${escapeHtml(s.word.term)}</span>
       <span style="color:${level.color};font-weight:700;">${s.row.current_proficiency || 0}%</span>
     </div>`;
   }).join('');
@@ -2759,7 +2708,7 @@ function renderNextPlanPopup() {
   `;
 
   const detailsList = document.getElementById('plan-change-details-list');
-  detailsList.innerHTML = summary.moved.map(m => `<div style="padding:5px 0;border-bottom:1px solid var(--border-subtle-3);">${m.term} ← <span style="color:var(--text-sub);">${m.newDate}</span></div>`).join('');
+  detailsList.innerHTML = summary.moved.map(m => `<div style="padding:5px 0;border-bottom:1px solid var(--border-subtle-3);">${escapeHtml(m.term)} ← <span style="color:var(--text-sub);">${m.newDate}</span></div>`).join('');
   document.getElementById('plan-change-details-toggle').textContent = `عرض المصطلحات المنقولة (${summary.moved.length}) ▾`;
   detailsList.style.display = 'none';
 
@@ -3043,7 +2992,7 @@ function renderPlanWordChecklist() {
       const words = node[g];
       html += `<div style="font-size:0.75rem;color:var(--text-sub);margin:8px 0 4px;">${subj==='history'?'التاريخ':'الجغرافيا'} — ${CONTENT_TYPE_LABELS[ct]||ct} — ${words[0]?.group_name || g}</div>`;
       words.forEach(w => {
-        html += `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text);padding:2px 0;"><input type="checkbox" class="ps-word-cb" data-word-id="${w.id}" data-subject="${subj}" data-ct="${ct}" onchange="updatePlanWordsCount()"> ${w.term}</label>`;
+        html += `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text);padding:2px 0;"><input type="checkbox" class="ps-word-cb" data-word-id="${w.id}" data-subject="${subj}" data-ct="${ct}" onchange="updatePlanWordsCount()"> ${escapeHtml(w.term)}</label>`;
       });
     });
   }));
@@ -3204,7 +3153,7 @@ async function calculatePlanRecommendation() {
           const p = progByWordId.get(w.id);
           return `<label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:0.8rem;cursor:pointer;">
             <input type="checkbox" class="ps-carry-forward-cb" data-word-id="${w.id}" onchange="updatePlanRecommendationPreview()">
-            <span style="flex:1;">${w.term}</span>
+            <span style="flex:1;">${escapeHtml(w.term)}</span>
             <span style="color:var(--text-sub);">${Math.round(p.current_proficiency)}% · ${levelLabel[p.proficiency_level]||''}</span>
           </label>`;
         }).join('')}
@@ -3268,15 +3217,6 @@ async function confirmPlan() {
   const btn = document.getElementById('ps-confirm-btn');
   btn.disabled = true; btn.textContent = '...جاري الإنشاء';
 
-  // Only one primary active plan at a time (§55) — archive any existing one
-  const { error: archiveErr } = await db.from('study_plans').update({ status: 'archived', updated_at: new Date().toISOString() }).eq('user_id', currentUser.id).eq('status', 'active');
-  if (archiveErr) {
-    console.error('confirmPlan archive-old-plan failed:', archiveErr);
-    btn.disabled = false; btn.textContent = 'إنشاء الخطة ✓';
-    alert('تعذّر إنشاء الخطة، حاول مرة أخرى.');
-    return;
-  }
-
   const scopeGroups = planDraft.scopeType === 'groups'
     ? Array.from(document.querySelectorAll('.ps-group-cb:checked')).reduce((acc,cb) => { (acc[cb.dataset.subject]=acc[cb.dataset.subject]||[]).push(parseInt(cb.dataset.group)); return acc; }, {})
     : null;
@@ -3290,43 +3230,24 @@ async function confirmPlan() {
   // Carried-forward words (already tested, student chose to keep the score) are excluded here —
   // they're already "learned" and never need fresh teaching.
   const { rows: sessionRows, orderedIds, categoryOrder } = buildCategoryOrderedSessions(planDraft.newConceptsForSchedule, planDraft.rec, planDraft.categoryOrderMode);
-
-  const { data: planRows, error: planErr } = await db.from('study_plans').insert({
-    user_id: currentUser.id, status: 'active', scope_type: planDraft.scopeType, scope_subjects: planDraft.subjects,
-    scope_groups: scopeGroups, scope_word_ids: scopeWordIds, scope_content_types: planDraft.contentTypes,
-    scope_count: null,
-    scope_trimester: (planDraft.scopeType==='trimester'||planDraft.scopeType==='groups'||planDraft.scopeType==='words') ? parseInt(document.getElementById('ps-trimester').value) : null,
-    category_order_mode: planDraft.contentTypes.length > 1 ? planDraft.categoryOrderMode : null,
-    category_order: planDraft.contentTypes.length > 1 ? categoryOrder : null,
-    target_exam_id: planDraft.targetExamId, target_date: planDraft.targetDate, frequency: planDraft.frequency,
-    concepts_per_session: planDraft.rec.conceptsPerSession, total_concepts: planDraft.pool.length,
-    new_concepts_count: planDraft.newConceptsForSchedule.length, pause_other_reviews: false
-  }).select();
-  if (planErr || !planRows || !planRows.length) { console.error('confirmPlan failed:', planErr); btn.disabled=false; btn.textContent='إنشاء الخطة ✓'; return; }
-  const planId = planRows[0].id;
-
-  const today = todayStr();
-  const rows = sessionRows.map(r => ({ ...r, plan_id: planId }));
-  // Carried-forward words: mark as already-learned inside this plan right away, keeping their
-  // existing concept_progress score untouched (it already follows the normal interval scheduler).
-  planDraft.carryForwardIds.forEach(id => rows.push({ plan_id: planId, word_id: id, session_number: 0, scheduled_date: today, status: 'learned', learned_at: new Date().toISOString() }));
-  const { error: concErr } = await db.from('plan_concepts').insert(rows);
-  if (concErr) {
-    console.error('confirmPlan plan_concepts insert failed:', concErr);
-    // Roll back the just-created plan so the student isn't left with an empty "active" plan
-    await db.from('study_plans').delete().eq('id', planId);
-    btn.disabled = false; btn.textContent = 'إنشاء الخطة ✓';
-    alert('تعذّر إنشاء الخطة، حاول مرة أخرى.');
-    return;
-  }
-
-  // "Start anew" words: previously tested but NOT carried forward — full reset (untested
-  // everywhere, including casual browsing), so they're taught completely fresh within this plan.
   const resetIds = planDraft.alreadyTested.map(w => w.id).filter(id => !planDraft.carryForwardIds.has(id));
-  if (resetIds.length) {
-    const { error: resetErr } = await db.from('concept_progress').delete().eq('user_id', currentUser.id).in('word_id', resetIds);
-    if (resetErr) console.error('confirmPlan concept_progress reset failed:', resetErr);
-  }
+
+  // One atomic transaction: archives any existing active plan, creates the new one, inserts its
+  // full teaching queue + carry-forward rows, and resets concept_progress for declined words —
+  // if any part fails, everything rolls back automatically, no manual compensating cleanup needed.
+  const { data: planId, error: planErr } = await dbWrite(db.rpc('create_study_plan', {
+    p_scope_type: planDraft.scopeType, p_scope_subjects: planDraft.subjects, p_scope_groups: scopeGroups,
+    p_scope_word_ids: scopeWordIds, p_scope_content_types: planDraft.contentTypes,
+    p_scope_trimester: (planDraft.scopeType==='trimester'||planDraft.scopeType==='groups'||planDraft.scopeType==='words') ? parseInt(document.getElementById('ps-trimester').value) : null,
+    p_category_order_mode: planDraft.contentTypes.length > 1 ? planDraft.categoryOrderMode : null,
+    p_category_order: planDraft.contentTypes.length > 1 ? categoryOrder : null,
+    p_target_exam_id: planDraft.targetExamId, p_target_date: planDraft.targetDate, p_frequency: planDraft.frequency,
+    p_concepts_per_session: planDraft.rec.conceptsPerSession, p_total_concepts: planDraft.pool.length,
+    p_new_concepts_count: planDraft.newConceptsForSchedule.length,
+    p_session_rows: sessionRows.map(r => ({ word_id: r.word_id, session_number: r.session_number, scheduled_date: r.scheduled_date, status: r.status })),
+    p_carry_forward_ids: [...planDraft.carryForwardIds], p_reset_word_ids: resetIds
+  }), { context: 'confirmPlan', message: 'تعذّر إنشاء الخطة، حاول مرة أخرى.' });
+  if (planErr || !planId) { btn.disabled = false; btn.textContent = 'إنشاء الخطة ✓'; return; }
 
   // Flag this plan to show the one-time "here's the order we'll follow" explainer
   // before its first learning session, if more than one category is involved.
@@ -3434,86 +3355,57 @@ async function savePlanEdits(planId, keepProgress) {
   const scopeWordIds = planDraft.scopeType === 'words'
     ? Array.from(document.querySelectorAll('.ps-word-cb:checked')).map(cb => parseInt(cb.dataset.wordId))
     : null;
-
-  const { error: planUpdErr } = await db.from('study_plans').update({
-    scope_type: planDraft.scopeType, scope_subjects: planDraft.subjects, scope_groups: scopeGroups,
-    scope_word_ids: scopeWordIds, scope_content_types: planDraft.contentTypes, scope_count: null,
-    scope_trimester: (planDraft.scopeType==='trimester'||planDraft.scopeType==='groups'||planDraft.scopeType==='words') ? parseInt(document.getElementById('ps-trimester').value) : null,
-    category_order_mode: planDraft.contentTypes.length > 1 ? planDraft.categoryOrderMode : null,
-    target_exam_id: planDraft.targetExamId, target_date: planDraft.targetDate, frequency: planDraft.frequency,
-    concepts_per_session: planDraft.rec.conceptsPerSession, total_concepts: planDraft.pool.length,
-    new_concepts_count: planDraft.newConceptsForSchedule.length, pause_other_reviews: false, updated_at: new Date().toISOString(),
-    status: planDraft.newConceptsForSchedule.length > 0 ? 'active' : 'completed'
-  }).eq('id', planId);
-  if (planUpdErr) {
-    console.error('savePlanEdits plan update failed:', planUpdErr);
-    btns.forEach(b => b.disabled = false);
-    alert('تعذّر حفظ التعديلات، حاول مرة أخرى.');
-    return;
-  }
-
   const today = todayStr();
+  const status = planDraft.newConceptsForSchedule.length > 0 ? 'active' : 'completed';
+
+  // Compute what changes (remove / keep / add / reschedule) exactly as before — this stays in
+  // JS since it's genuinely readable set-difference logic. Only the WRITE of the result is
+  // funneled through one atomic RPC call now, instead of 3-4 separate requests.
+  let sessionRows, categoryOrder, removeIds = [], newCarryForwardIds = [];
 
   if (!keepProgress) {
-    // Wipe this plan's own tracking and rebuild fresh. Never touches concept_progress (real test history/proficiency stays intact).
-    const { error: delErr } = await db.from('plan_concepts').delete().eq('plan_id', planId);
-    if (delErr) { console.error('savePlanEdits delete failed:', delErr); btns.forEach(b => b.disabled = false); alert('تعذّر حفظ التعديلات، حاول مرة أخرى.'); return; }
-    const { rows: sessionRows, categoryOrder } = buildCategoryOrderedSessions(planDraft.newConceptsForSchedule, planDraft.rec, planDraft.categoryOrderMode);
-    const rows = sessionRows.map(r => ({ ...r, plan_id: planId }));
-    planDraft.carryForwardIds.forEach(id => rows.push({ plan_id: planId, word_id: id, session_number: 0, scheduled_date: today, status: 'learned', learned_at: new Date().toISOString() }));
-    const { error: insErr } = await db.from('plan_concepts').insert(rows);
-    if (insErr) {
-      console.error('savePlanEdits rebuild insert failed:', insErr);
-      btns.forEach(b => b.disabled = false);
-      alert('تم حذف الجدول القديم لكن تعذّر إنشاء الجديد. يرجى إعادة المحاولة أو التواصل معنا.');
-      return;
-    }
-    if (planDraft.contentTypes.length > 1) {
-      localStorage.setItem(`plan-order-explained-${planId}`, 'pending');
-      localStorage.setItem(`plan-order-info-${planId}`, JSON.stringify({ mode: planDraft.categoryOrderMode, order: categoryOrder }));
-      await dbWrite(db.from('study_plans').update({ category_order: categoryOrder }).eq('id', planId), { context: 'savePlanEdits category_order (rebuild)', silent: true });
-    }
+    const built = buildCategoryOrderedSessions(planDraft.newConceptsForSchedule, planDraft.rec, planDraft.categoryOrderMode);
+    sessionRows = built.rows; categoryOrder = built.categoryOrder;
+    newCarryForwardIds = [...planDraft.carryForwardIds];
   } else {
-    // Keep already-learned concepts untouched; reschedule/add the rest to fit the edited plan
     const newPoolIds = new Set(planDraft.pool.map(w => w.id));
     const carryForwardIds = planDraft.carryForwardIds;
     const { data: existingRows } = await db.from('plan_concepts').select('*').eq('plan_id', planId);
     const learnedIds = new Set((existingRows||[]).filter(r=>r.status==='learned').map(r=>r.word_id));
     const existingWordIds = new Set((existingRows||[]).map(r=>r.word_id));
 
-    // Drop rows no longer in scope — but never touch learned ones, their history stays regardless
-    const toRemove = (existingRows||[]).filter(r => r.status!=='learned' && !newPoolIds.has(r.word_id) && !carryForwardIds.has(r.word_id));
-    if (toRemove.length) await dbWrite(db.from('plan_concepts').delete().in('id', toRemove.map(r=>r.id)), { context: 'savePlanEdits remove out-of-scope', message: 'تعذّر إزالة بعض المصطلحات من الخطة.' });
+    removeIds = (existingRows||[]).filter(r => r.status!=='learned' && !newPoolIds.has(r.word_id) && !carryForwardIds.has(r.word_id)).map(r=>r.id);
 
-    // Reschedule everything still needed (new + previously-pending, minus anything already learned)
     const stillNeededPool = planDraft.newConceptsForSchedule.filter(w => !learnedIds.has(w.id));
-    const { rows: sessionRows, categoryOrder } = buildCategoryOrderedSessions(stillNeededPool, planDraft.rec, planDraft.categoryOrderMode);
-    const upserts = sessionRows.map(r => ({ plan_id: planId, word_id: r.word_id, session_number: r.session_number, scheduled_date: r.scheduled_date, status: 'pending' }));
-    if (upserts.length) {
-      const { error: upsertErr } = await db.from('plan_concepts').upsert(upserts, { onConflict: 'plan_id,word_id' });
-      if (upsertErr) {
-        console.error('savePlanEdits upsert failed:', upsertErr);
-        btns.forEach(b => b.disabled = false);
-        alert('تعذّر حفظ بعض التعديلات، حاول مرة أخرى.');
-        return;
-      }
-    }
-    if (planDraft.contentTypes.length > 1) {
-      localStorage.setItem(`plan-order-info-${planId}`, JSON.stringify({ mode: planDraft.categoryOrderMode, order: categoryOrder }));
-      await dbWrite(db.from('study_plans').update({ category_order: categoryOrder }).eq('id', planId), { context: 'savePlanEdits category_order (keepProgress)', silent: true });
-      if (!localStorage.getItem(`plan-order-explained-${planId}`)) localStorage.setItem(`plan-order-explained-${planId}`, 'pending');
-    }
+    const built = buildCategoryOrderedSessions(stillNeededPool, planDraft.rec, planDraft.categoryOrderMode);
+    sessionRows = built.rows; categoryOrder = built.categoryOrder;
 
-    const newCarryForward = [...carryForwardIds].filter(id => !existingWordIds.has(id));
-    if (newCarryForward.length) await dbWrite(db.from('plan_concepts').insert(newCarryForward.map(id => ({ plan_id: planId, word_id: id, session_number: 0, scheduled_date: today, status: 'learned', learned_at: new Date().toISOString() }))), { context: 'savePlanEdits new carry-forward', message: 'تعذّر اعتماد بعض المصطلحات المُعتمدة مسبقاً.' });
+    newCarryForwardIds = [...carryForwardIds].filter(id => !existingWordIds.has(id));
   }
 
-  // "Start anew" words: previously tested but NOT carried forward — full reset (untested
-  // everywhere, including casual browsing), so they're taught completely fresh within this plan.
   const resetIds = planDraft.alreadyTested.map(w => w.id).filter(id => !planDraft.carryForwardIds.has(id));
-  if (resetIds.length) {
-    const { error: resetErr } = await db.from('concept_progress').delete().eq('user_id', currentUser.id).in('word_id', resetIds);
-    if (resetErr) console.error('savePlanEdits concept_progress reset failed:', resetErr);
+
+  const { error } = await dbWrite(db.rpc('save_plan_edits', {
+    p_plan_id: planId,
+    p_scope_type: planDraft.scopeType, p_scope_subjects: planDraft.subjects, p_scope_groups: scopeGroups,
+    p_scope_word_ids: scopeWordIds, p_scope_content_types: planDraft.contentTypes,
+    p_scope_trimester: (planDraft.scopeType==='trimester'||planDraft.scopeType==='groups'||planDraft.scopeType==='words') ? parseInt(document.getElementById('ps-trimester').value) : null,
+    p_category_order_mode: planDraft.contentTypes.length > 1 ? planDraft.categoryOrderMode : null,
+    p_category_order: categoryOrder,
+    p_target_exam_id: planDraft.targetExamId, p_target_date: planDraft.targetDate, p_frequency: planDraft.frequency,
+    p_concepts_per_session: planDraft.rec.conceptsPerSession, p_total_concepts: planDraft.pool.length,
+    p_new_concepts_count: planDraft.newConceptsForSchedule.length, p_status: status,
+    p_keep_progress: keepProgress,
+    p_session_rows: sessionRows.map(r => ({ word_id: r.word_id, session_number: r.session_number, scheduled_date: r.scheduled_date, status: r.status })),
+    p_carry_forward_ids: newCarryForwardIds, p_remove_ids: removeIds, p_reset_word_ids: resetIds
+  }), { context: 'savePlanEdits', message: 'تعذّر حفظ التعديلات، حاول مرة أخرى.' });
+
+  if (error) { btns.forEach(b => b.disabled = false); return; }
+
+  // Purely local UI-state flags, unrelated to the DB write above
+  if (planDraft.contentTypes.length > 1) {
+    localStorage.setItem(`plan-order-info-${planId}`, JSON.stringify({ mode: planDraft.categoryOrderMode, order: categoryOrder }));
+    if (!keepProgress || !localStorage.getItem(`plan-order-explained-${planId}`)) localStorage.setItem(`plan-order-explained-${planId}`, 'pending');
   }
 
   // Restore any reviews left paused by the old "pause other reviews" feature (now removed)
@@ -3764,12 +3656,12 @@ function renderGuidedStep() {
 
   if (guidedStep === 'intro') {
     container.innerHTML = `
-      <div style="text-align:center;font-weight:800;font-size:1.15rem;color:var(--text);margin-bottom:14px;">${w.term}</div>
+      <div style="text-align:center;font-weight:800;font-size:1.15rem;color:var(--text);margin-bottom:14px;">${escapeHtml(w.term)}</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px;">
         ${w.components.map(c => `
           <div style="border:1.5px solid ${GUIDED_COLOR_HEX[c.color_role]||'#888'};background:${GUIDED_COLOR_HEX[c.color_role]||'#888'}1a;border-radius:12px;padding:12px 14px;">
-            <div style="font-size:0.72rem;color:${GUIDED_COLOR_HEX[c.color_role]||'#888'};font-weight:700;margin-bottom:3px;">${c.question}</div>
-            <div style="font-size:0.88rem;color:var(--text);line-height:1.6;">${c.answer}</div>
+            <div style="font-size:0.72rem;color:${GUIDED_COLOR_HEX[c.color_role]||'#888'};font-weight:700;margin-bottom:3px;">${escapeHtml(c.question)}</div>
+            <div style="font-size:0.88rem;color:var(--text);line-height:1.6;">${escapeHtml(c.answer)}</div>
           </div>`).join('')}
       </div>
       <button class="btn btn-primary" style="width:100%;padding:13px;" onclick="guidedStep='question'; guidedQIdx=0; renderGuidedStep();">متابعة ▶</button>`;
@@ -3780,12 +3672,12 @@ function renderGuidedStep() {
     const c = w.components[guidedQIdx];
     container.innerHTML = `
       <div style="text-align:center;font-size:0.75rem;color:var(--text-sub);margin-bottom:6px;">سؤال ${guidedQIdx+1} / ${w.components.length}</div>
-      <div style="text-align:center;font-weight:800;font-size:1.05rem;color:${GUIDED_COLOR_HEX[c.color_role]||'#888'};margin-bottom:14px;">${c.question}</div>
+      <div style="text-align:center;font-weight:800;font-size:1.05rem;color:${GUIDED_COLOR_HEX[c.color_role]||'#888'};margin-bottom:14px;">${escapeHtml(c.question)}</div>
       <textarea id="pl-guided-input" placeholder="اكتب إجابتك هنا..." rows="3" style="width:100%;padding:11px 14px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:12px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.9rem;outline:none;direction:rtl;resize:vertical;margin-bottom:10px;"></textarea>
       <div id="pl-guided-answer" style="display:none;border:1.5px solid ${GUIDED_COLOR_HEX[c.color_role]||'#888'};background:${GUIDED_COLOR_HEX[c.color_role]||'#888'}1a;border-radius:12px;padding:12px 14px;margin-bottom:14px;">
         <div id="pl-guided-score" style="font-size:0.75rem;font-weight:700;margin-bottom:6px;"></div>
         <div style="font-size:0.72rem;color:var(--text-sub);margin-bottom:3px;">الإجابة الصحيحة:</div>
-        <div style="font-size:0.88rem;color:var(--text);line-height:1.6;">${c.answer}</div>
+        <div style="font-size:0.88rem;color:var(--text);line-height:1.6;">${escapeHtml(c.answer)}</div>
       </div>
       <button class="btn btn-primary" id="pl-guided-check-btn" style="width:100%;padding:13px;" onclick="revealGuidedAnswer()">تحقق من إجابتك</button>
       <button class="btn btn-primary" id="pl-guided-next-btn" style="width:100%;padding:13px;display:none;" onclick="guidedNextQuestion()">التالي ▶</button>`;
@@ -3796,8 +3688,8 @@ function renderGuidedStep() {
     container.innerHTML = `
       <div style="text-align:center;font-weight:800;font-size:1rem;color:var(--text);margin-bottom:10px;">📖 التعريف الكامل</div>
       <div style="background:var(--card-bg);border:1.5px solid var(--border-subtle-3);border-radius:12px;padding:16px;margin-bottom:16px;">
-        <div style="font-weight:700;color:var(--text);margin-bottom:6px;">${w.term}</div>
-        <div style="font-size:0.9rem;color:var(--text);line-height:1.8;">${w.def}</div>
+        <div style="font-weight:700;color:var(--text);margin-bottom:6px;">${escapeHtml(w.term)}</div>
+        <div style="font-size:0.9rem;color:var(--text);line-height:1.8;">${escapeHtml(w.def)}</div>
       </div>
       <button class="btn btn-primary" style="width:100%;padding:13px;" onclick="guidedStep='qcm'; renderGuidedStep();">متابعة ▶</button>`;
     return;
@@ -3876,7 +3768,7 @@ function renderGuidedQcmStep(w) {
   const options = buildCompleteDefinitionOptions(w);
   guidedQcmSelected = false;
   container.innerHTML = `
-    <div style="text-align:center;font-weight:800;font-size:1rem;color:var(--text);margin-bottom:4px;">🧩 ما المقصود بـ "${w.term}"؟</div>
+    <div style="text-align:center;font-weight:800;font-size:1rem;color:var(--text);margin-bottom:4px;">🧩 ما المقصود بـ "${escapeHtml(w.term)}"؟</div>
     <div style="text-align:center;font-size:0.72rem;color:var(--text-sub);margin-bottom:14px;">اختر التعريف الصحيح</div>
     <div id="pl-guided-qcm-opts" style="display:flex;flex-direction:column;gap:8px;"></div>
     <button class="btn btn-primary" id="pl-guided-qcm-next" style="width:100%;padding:13px;margin-top:14px;display:none;" onclick="planLearnAdvanceWord()">${planLearnIdx < planLearnWords.length-1 ? 'المصطلح التالي ▶' : 'ابدأ اختبار الكتابة ▶'}</button>`;
@@ -4116,8 +4008,8 @@ function showReviewResults() {
   const wordsEl = document.getElementById('res-words'); wordsEl.innerHTML = '';
   rwAnswers.forEach(a => {
     const score = a.match.score; const level = classifyProficiency(score);
-    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${a.word.def}</div>` : '';
-    wordsEl.innerHTML += `<div class="word-result"><div class="word-result-term">${level.emoji} ${a.word.term}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}</div>`;
+    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${escapeHtml(a.word.def)}</div>` : '';
+    wordsEl.innerHTML += `<div class="word-result"><div class="word-result-term">${level.emoji} ${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}</div>`;
   });
   const retryBtn = document.querySelector('#pg-results .nav .btn-ghost');
   retryBtn.textContent = '← مركز المراجعة'; retryBtn.onclick = openReviewHub;
@@ -4136,8 +4028,8 @@ function showPlanLearnResults() {
   const wordsEl = document.getElementById('res-words'); wordsEl.innerHTML = '';
   rwAnswers.forEach(a => {
     const score = a.match.score; const level = classifyProficiency(score);
-    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${a.word.def}</div>` : '';
-    wordsEl.innerHTML += `<div class="word-result"><div class="word-result-term">${level.emoji} ${a.word.term}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}</div>`;
+    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${escapeHtml(a.word.def)}</div>` : '';
+    wordsEl.innerHTML += `<div class="word-result"><div class="word-result-term">${level.emoji} ${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}</div>`;
   });
   const retryBtn = document.querySelector('#pg-results .nav .btn-ghost');
   retryBtn.textContent = '← مركز المراجعة'; retryBtn.onclick = openReviewHub;
@@ -4280,19 +4172,14 @@ async function classifyDiffSegment(wordId, expectedFullTokens, seg) {
 
   // Check the admin-curated synonym table for a confirmed verdict
   try {
-    const { data: existing } = await db.from('word_synonym_pairs').select('*')
-      .eq('word_id', wordId).eq('normalized_expected_phrase', normExp).eq('normalized_student_phrase', normStu);
-    if (existing && existing.length > 0) {
-      const row = existing[0];
-      await dbWrite(db.from('word_synonym_pairs').update({ occurrence_count: row.occurrence_count + 1 }).eq('id', row.id), { context: 'word_synonym_pairs increment', silent: true });
+    const { data: row, error } = await db.rpc('submit_synonym_variant', {
+      p_word_id: wordId, p_expected_phrase: expPhrase, p_normalized_expected: normExp,
+      p_student_phrase: stuPhrase, p_normalized_student: normStu
+    });
+    if (!error && row) {
       if (row.status === 'approved') return { color: 'correct', explanation: null, expPhrase, stuPhrase };
       if (row.status === 'rejected') return { color: 'wrong', explanation: `🔴 "${stuPhrase}"\nالمتوقع: "${expPhrase}"`, expPhrase, stuPhrase };
       // still pending — fall through to best-guess below
-    } else {
-      await dbWrite(db.from('word_synonym_pairs').insert({
-        word_id: wordId, expected_phrase: expPhrase, normalized_expected_phrase: normExp,
-        student_phrase: stuPhrase, normalized_student_phrase: normStu, status: 'pending', occurrence_count: 1
-      }), { context: 'word_synonym_pairs log new', silent: true });
     }
   } catch (e) { console.error('classifyDiffSegment lookup failed:', e); }
 
@@ -4399,7 +4286,7 @@ function showResultsQCM() {
   setBar('res-overall-bar',overall); document.getElementById('res-mastered').textContent=mastered+' / '+WORDS.length+' مصطلح متقن (≥ 70%)';
   updatePills(overall);
   const wordsEl=document.getElementById('res-words'); wordsEl.innerHTML='';
-  qcmAnswers.forEach(a => { const s=a.correct?100:0; wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${a.word.term}</div><div class="bar-wrap"><div class="bar-fill" style="width:${s}%;background:${barColor(s)}"></div></div><div class="word-result-pct" style="color:${barColor(s)}">${s}%</div></div>`; });
+  qcmAnswers.forEach(a => { const s=a.correct?100:0; wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${s}%;background:${barColor(s)}"></div></div><div class="word-result-pct" style="color:${barColor(s)}">${s}%</div></div>`; });
   showPage('results');
 }
 
@@ -4419,12 +4306,12 @@ async function startRewrite() {
   }
   rwQuestions=shuffle(WORDS); rwIdx=0; rwAnswers=[];
   document.getElementById('rw-resume-bar').style.display='none';
-  const { data: testRows, error: testErr } = await db.from('rewrite_tests').insert({
-    user_id: currentUser.id, subject: currentSubject, group_number: currentGroup === 'all' ? null : currentGroup,
-    submitted_at: null, overall_score: null
-  }).select();
-  if (testErr) console.error('startRewrite test row creation failed:', testErr);
-  currentCasualTestId = (testRows && testRows[0]) ? testRows[0].id : null;
+  const { data: testId, error: testErr } = await db.rpc('create_rewrite_test', {
+    p_subject: currentSubject, p_group_number: currentGroup === 'all' ? null : currentGroup,
+    p_word_ids: rwQuestions.map(w => w.id)
+  });
+  if (testErr) console.error('startRewrite create_rewrite_test failed:', testErr);
+  currentCasualTestId = testId || null;
   saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[],testId:currentCasualTestId}); enterRewritePage();
 }
 async function loadRWVariants(wordIds) {
@@ -4609,22 +4496,13 @@ function downgradeLevelKey(levelKey) {
 
 async function persistSecondChanceRetest(answers, initialScores) {
   try {
-    const { data: testRows } = await dbWrite(db.from('rewrite_tests').insert({
-      user_id: currentUser.id, subject: 'review_retest', group_number: null,
-      submitted_at: new Date().toISOString(), overall_score: Math.round(answers.reduce((s,a)=>s+a.match.score,0)/answers.length)
-    }).select(), { context: 'persistSecondChanceRetest test row', silent: true });
-    const testId = testRows && testRows[0] ? testRows[0].id : null;
+    const { data: testId, error: testErr } = await dbWrite(db.rpc('create_rewrite_test', {
+      p_subject: 'review_retest', p_group_number: null, p_word_ids: answers.map(a => a.word.id),
+      p_submitted_at: new Date().toISOString(), p_overall_score: Math.round(answers.reduce((s,a)=>s+a.match.score,0)/answers.length)
+    }), { context: 'persistSecondChanceRetest create_rewrite_test', silent: true });
+    if (testErr) return;
 
     for (const a of answers) {
-      if (testId) {
-        await dbWrite(db.from('rewrite_test_answers').insert({
-          test_id: testId, word_id: a.word.id, raw_student_answer: a.raw,
-          normalized_student_answer: a.match.normalizedStudent, match_type: a.match.matchType,
-          similarity_score: a.match.similarity, score: a.match.score,
-          is_second_chance_retest: true, initial_score_before_retest: initialScores[a.word.id] ?? null
-        }), { context: 'persistSecondChanceRetest answer', silent: true });
-      }
-
       // Conservative update: real level from the retest score, downgraded one
       // tier for INTERVAL purposes only — current_proficiency still shows the
       // actual retest score, since the student did genuinely demonstrate it.
@@ -4633,12 +4511,13 @@ async function persistSecondChanceRetest(answers, initialScores) {
       const interval = REVIEW_INTERVALS[intervalLevelKey]; // never a "first ever" test at this point — it's a review retest
       const nextReviewAt = addDaysStr(todayStr(), interval);
 
-      const { data: existingProg } = await db.from('concept_progress').select('id').eq('user_id', currentUser.id).eq('word_id', a.word.id);
-      if (existingProg && existingProg.length) {
-        await dbWrite(db.from('concept_progress').update({
-          current_proficiency: a.match.score, proficiency_level: realLevel.key,
-          last_tested_at: new Date().toISOString(), next_review_at: nextReviewAt, current_interval: interval
-        }).eq('id', existingProg[0].id), { context: 'persistSecondChanceRetest concept_progress', silent: true });
+      if (testId) {
+        await dbWrite(db.rpc('persist_answer_and_progress', {
+          p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
+          p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
+          p_proficiency_level: realLevel.key, p_next_review_at: nextReviewAt, p_interval: interval,
+          p_is_second_chance: true, p_initial_score_before_retest: initialScores[a.word.id] ?? null
+        }), { context: 'persistSecondChanceRetest answer+progress', silent: true });
       }
     }
   } catch (e) { console.error('persistSecondChanceRetest failed:', e); }
@@ -4653,7 +4532,7 @@ function showSecondChanceResults(retestAnswers) {
     const improved = after > before;
     return `
       <div style="background:var(--card-bg);border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-weight:700;color:var(--text);font-size:0.85rem;">${a.word.term}</div>
+        <div style="font-weight:700;color:var(--text);font-size:0.85rem;">${escapeHtml(a.word.term)}</div>
         <div style="font-size:0.85rem;">
           <span style="color:var(--wrong-text,#da8a8a);">${before}%</span>
           <span style="color:var(--text-sub);"> ← </span>
@@ -4686,7 +4565,7 @@ async function submitRW() {
   }
   if (match.matchType==='unknown') {
     const variantRow = await logUnknownVariant(w.id, input, match.normalizedStudent);
-    triggerAiJudgment(variantRow, w.id, w.term, w.def, input, normalizeAnswer(w.def), match.normalizedStudent,
+    triggerAiJudgment(variantRow, w.id,
       isCasualFlow && casualAnswerRowId ? { answerRowId: casualAnswerRowId } : null); // fire-and-forget, not awaited
   }
   saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:rwAnswers.map(a=>({wordId:a.word.id,raw:a.raw,match:a.match})),testId:currentCasualTestId});
@@ -4758,12 +4637,12 @@ async function nextRW() {
 async function restartRW() {
   clearDraft('rewrite'); document.getElementById('rw-resume-bar').style.display='none';
   rwQuestions=shuffle(WORDS); rwIdx=0; rwAnswers=[];
-  const { data: testRows, error: testErr } = await db.from('rewrite_tests').insert({
-    user_id: currentUser.id, subject: currentSubject, group_number: currentGroup === 'all' ? null : currentGroup,
-    submitted_at: null, overall_score: null
-  }).select();
-  if (testErr) console.error('restartRW test row creation failed:', testErr);
-  currentCasualTestId = (testRows && testRows[0]) ? testRows[0].id : null;
+  const { data: testId, error: testErr } = await db.rpc('create_rewrite_test', {
+    p_subject: currentSubject, p_group_number: currentGroup === 'all' ? null : currentGroup,
+    p_word_ids: rwQuestions.map(w => w.id)
+  });
+  if (testErr) console.error('restartRW create_rewrite_test failed:', testErr);
+  currentCasualTestId = testId || null;
   saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[],testId:currentCasualTestId}); renderRW();
 }
 function showResultsRW() {
@@ -4781,9 +4660,9 @@ function showResultsRW() {
   rwAnswers.forEach(a => {
     const score = a.match.score;
     const level = classifyProficiency(score);
-    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${a.word.def}</div>` : '';
+    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${escapeHtml(a.word.def)}</div>` : '';
     const pendingNote = a.match.matchType==='unknown' ? `<div style="font-size:0.7rem;color:var(--text-sub);margin-top:2px;">قيد مراجعة المشرف — إجابتك قد تُقبل كبديل صحيح</div>` : '';
-    wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${level.emoji} ${a.word.term}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}${pendingNote}</div>`;
+    wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${level.emoji} ${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}${pendingNote}</div>`;
   });
   showPage('results');
 }
@@ -4807,7 +4686,7 @@ function searchWords(query) {
   results.style.display = 'block';
   results.innerHTML = matches.map(w => `
     <div onclick="showSearchResult(${w.id})" style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;">
-      <div style="font-weight:700;color:var(--accent);font-size:0.85rem;">${w.term}</div>
+      <div style="font-weight:700;color:var(--accent);font-size:0.85rem;">${escapeHtml(w.term)}</div>
       <div style="font-size:0.75rem;color:var(--text-sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${w.def.substring(0,80)}...</div>
     </div>`).join('');
 }
