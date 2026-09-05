@@ -872,7 +872,6 @@ body {
   <!-- Tabs -->
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('users')">👥 المستخدمون</button>
-    <button class="tab-btn" onclick="switchTab('keys')">🔑 المفاتيح</button>
     <button class="tab-btn" onclick="switchTab('content')">📚 المحتوى</button>
     <button class="tab-btn" onclick="switchTab('components')">🧩 المكونات</button>
     <button class="tab-btn" onclick="switchTab('review')">🔍 المراجعة <span id="review-pending-badge" style="display:none;font-size:0.65rem;background:var(--gold);color:#0a0a0f;border-radius:8px;padding:1px 6px;margin-right:4px;"></span></button>
@@ -888,15 +887,6 @@ body {
           style="width:100%;padding:11px 14px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:12px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.88rem;outline:none;direction:rtl;">
       </div>
       <div id="users-list"><div class="spinner"></div></div>
-    </div>
-
-    <!-- KEYS TAB -->
-    <div id="tab-keys" class="tab-content">
-      <div class="generate-bar">
-        <input type="text" id="new-key-input" placeholder="اكتب مفتاحاً أو اتركه فارغاً للتوليد التلقائي" />
-        <button class="btn btn-ghost" onclick="generateKey()">➕ إنشاء مفتاح</button>
-      </div>
-      <div id="keys-list"><div class="spinner"></div></div>
     </div>
 
     <!-- CONTENT TAB -->
@@ -1051,13 +1041,12 @@ body {
 <div class="modal-overlay" id="approve-modal">
   <div class="modal">
     <div class="modal-title">✅ تفعيل المستخدم</div>
-    <div class="modal-sub">اختر مدة الاشتراك للمستخدم</div>
+    <div class="modal-sub">اختر تاريخ انتهاء الاشتراك بالضبط</div>
     <div class="modal-email" id="modal-email"></div>
-    <div class="duration-grid">
-      <button class="duration-btn" onclick="selectDuration(1)">شهر واحد</button>
-      <button class="duration-btn" onclick="selectDuration(3)">3 أشهر</button>
-      <button class="duration-btn" onclick="selectDuration(6)">6 أشهر</button>
-      <button class="duration-btn" onclick="selectDuration(12)">سنة كاملة</button>
+    <div style="margin:14px 0;">
+      <label class="form-label">تاريخ انتهاء الاشتراك</label>
+      <input type="date" class="form-input" id="approve-expiry-input" oninput="onApproveExpiryChange()"
+        style="width:100%;padding:11px 14px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:12px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.95rem;outline:none;">
     </div>
     <div class="modal-actions">
       <button class="btn btn-success" onclick="confirmApprove()" id="confirm-approve-btn" disabled>تفعيل ✓</button>
@@ -1070,13 +1059,12 @@ body {
 <div class="modal-overlay" id="renew-modal">
   <div class="modal">
     <div class="modal-title">🔄 تجديد الاشتراك</div>
-    <div class="modal-sub">اختر مدة التجديد</div>
+    <div class="modal-sub">اختر تاريخ انتهاء الاشتراك الجديد بالضبط</div>
     <div class="modal-email" id="renew-modal-email"></div>
-    <div class="duration-grid">
-      <button class="duration-btn" onclick="selectRenewDuration(1)">شهر واحد</button>
-      <button class="duration-btn" onclick="selectRenewDuration(3)">3 أشهر</button>
-      <button class="duration-btn" onclick="selectRenewDuration(6)">6 أشهر</button>
-      <button class="duration-btn" onclick="selectRenewDuration(12)">سنة كاملة</button>
+    <div style="margin:14px 0;">
+      <label class="form-label">تاريخ انتهاء الاشتراك</label>
+      <input type="date" class="form-input" id="renew-expiry-input" oninput="onRenewExpiryChange()"
+        style="width:100%;padding:11px 14px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:12px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.95rem;outline:none;">
     </div>
     <div class="modal-actions">
       <button class="btn btn-success" onclick="confirmRenew()" id="confirm-renew-btn" disabled>تجديد ✓</button>
@@ -1096,10 +1084,8 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const ADMIN_EMAIL = 'amirarahal2001@gmail.com';
 
 let currentAdmin = null;
-let selectedDuration = null;
 let selectedUserEmail = null;
 let selectedRenewEmail = null;
-let selectedRenewDuration = null;
 
 // Escapes text before interpolating it into innerHTML — required for any student-submitted or
 // otherwise untrusted free-text field, since this app renders directly into the admin's own
@@ -1183,7 +1169,7 @@ updateThemeIcon();
 async function loadDashboard() {
   document.getElementById('admin-email-display').textContent = currentAdmin.email;
   showPage('dashboard');
-  await Promise.all([loadUsers(), loadKeys(), refreshReviewBadge()]);
+  await Promise.all([loadUsers(), refreshReviewBadge()]);
 }
 
 async function refreshReviewBadge() {
@@ -1297,26 +1283,29 @@ function renderUsers(users) {
 
 // ── APPROVE ──
 function openApproveModal(email) {
-  selectedUserEmail = email; selectedDuration = null;
+  selectedUserEmail = email;
   document.getElementById('modal-email').textContent = email;
-  document.querySelectorAll('.duration-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('approve-expiry-input').value = '';
   document.getElementById('confirm-approve-btn').disabled = true;
   document.getElementById('approve-modal').classList.add('active');
 }
 function closeModal() { document.getElementById('approve-modal').classList.remove('active'); }
 
-function selectDuration(months) {
-  selectedDuration = months;
-  document.querySelectorAll('#approve-modal .duration-btn').forEach(b => b.classList.remove('selected'));
-  event.target.classList.add('selected');
-  document.getElementById('confirm-approve-btn').disabled = false;
+function onApproveExpiryChange() {
+  const val = document.getElementById('approve-expiry-input').value;
+  document.getElementById('confirm-approve-btn').disabled = !val;
 }
 
 async function confirmApprove() {
-  if (!selectedUserEmail || !selectedDuration) return;
+  const dateVal = document.getElementById('approve-expiry-input').value;
+  if (!selectedUserEmail || !dateVal) return;
+
+  // Send as end-of-day so "expires 2026-12-31" means the student keeps access
+  // through the entire selected day, not midnight at its start.
+  const expiryIso = new Date(dateVal + 'T23:59:59').toISOString();
 
   const { data: result, error } = await dbWrite(
-    db.rpc('approve_user', { p_email: selectedUserEmail, p_months: selectedDuration }),
+    db.rpc('approve_user', { p_email: selectedUserEmail, p_expiry_date: expiryIso }),
     { context: 'confirmApprove', message: 'تعذّر تفعيل المستخدم، حاول مرة أخرى.' }
   );
   if (error || !result || !result.success) return;
@@ -1324,33 +1313,34 @@ async function confirmApprove() {
   closeModal();
   showToast('✅ تم تفعيل المستخدم بنجاح!');
 
-  // Send the welcome email — best-effort: if it fails, the approval itself
+  // Send the activation email — best-effort: if it fails, the approval itself
   // already succeeded above, so don't block or roll anything back on this.
+  // Use the email/first_name/expiry_date the database just confirmed and
+  // returned, rather than re-deriving them client-side, so the email always
+  // matches exactly what was actually saved.
   // Failures are shown as a toast (not just console.error) since admin
   // usually works from a phone with no way to see the browser console.
   try {
-    const student = allUsers.find(u => u.email === selectedUserEmail);
     const { data: { session } } = await db.auth.getSession();
     if (!session) {
-      showToast('⚠️ لم يتم إرسال إيميل الترحيب: لا توجد جلسة نشطة');
+      showToast('⚠️ لم يتم إرسال إيميل التفعيل: لا توجد جلسة نشطة');
     } else {
       const res = await fetch(`${SUPABASE_URL}/functions/v1/clever-service`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({
-          email: selectedUserEmail,
-          firstName: student?.first_name || '',
-          accessKey: key,
-          expiryDate: expiry.toISOString()
+          email: result.email,
+          firstName: result.first_name || '',
+          expiryDate: result.expiry_date
         })
       });
-      const result = await res.json().catch(() => ({ error: `استجابة غير صالحة (${res.status})` }));
-      if (!res.ok || result.error) {
-        showToast('⚠️ فشل إرسال إيميل الترحيب: ' + (result.error || res.status));
+      const emailResult = await res.json().catch(() => ({ error: `استجابة غير صالحة (${res.status})` }));
+      if (!res.ok || emailResult.error) {
+        showToast('⚠️ فشل إرسال إيميل التفعيل: ' + (emailResult.error || res.status) + ' — يمكنك إعادة المحاولة من قائمة المستخدمين');
       }
     }
   } catch (e) {
-    showToast('⚠️ فشل إرسال إيميل الترحيب: ' + (e?.message || 'خطأ في الشبكة'));
+    showToast('⚠️ فشل إرسال إيميل التفعيل: ' + (e?.message || 'خطأ في الشبكة'));
   }
 
   await loadUsers();
@@ -1397,80 +1387,36 @@ async function deleteUser(email) {
 
 // ── RENEW ──
 function openRenewModal(email) {
-  selectedRenewEmail = email; selectedRenewDuration = null;
+  selectedRenewEmail = email;
   document.getElementById('renew-modal-email').textContent = email;
-  document.querySelectorAll('#renew-modal .duration-btn').forEach(b => b.classList.remove('selected'));
+  document.getElementById('renew-expiry-input').value = '';
   document.getElementById('confirm-renew-btn').disabled = true;
   document.getElementById('renew-modal').classList.add('active');
 }
 function closeRenewModal() { document.getElementById('renew-modal').classList.remove('active'); }
 
-function selectRenewDuration(months) {
-  selectedRenewDuration = months;
-  document.querySelectorAll('#renew-modal .duration-btn').forEach(b => b.classList.remove('selected'));
-  event.target.classList.add('selected');
-  document.getElementById('confirm-renew-btn').disabled = false;
+function onRenewExpiryChange() {
+  const val = document.getElementById('renew-expiry-input').value;
+  document.getElementById('confirm-renew-btn').disabled = !val;
 }
 
 async function confirmRenew() {
-  if (!selectedRenewEmail || !selectedRenewDuration) return;
-  const expiry = new Date();
-  expiry.setMonth(expiry.getMonth() + selectedRenewDuration);
-  const { error } = await dbWrite(db.from('profiles').update({ is_approved: true, expiry_date: expiry.toISOString() }).eq('email', selectedRenewEmail), { context: 'confirmRenew', message: 'تعذّر تجديد الاشتراك، حاول مرة أخرى.' });
-  if (error) return;
+  const dateVal = document.getElementById('renew-expiry-input').value;
+  if (!selectedRenewEmail || !dateVal) return;
+
+  const expiryIso = new Date(dateVal + 'T23:59:59').toISOString();
+
+  // Same RPC as activation -- renewal is just re-activation with a new date,
+  // so it goes through the same admin check and future-date validation
+  // instead of a separate direct table update.
+  const { data: result, error } = await dbWrite(
+    db.rpc('approve_user', { p_email: selectedRenewEmail, p_expiry_date: expiryIso }),
+    { context: 'confirmRenew', message: 'تعذّر تجديد الاشتراك، حاول مرة أخرى.' }
+  );
+  if (error || !result || !result.success) return;
   closeRenewModal();
   showToast('🔄 تم تجديد الاشتراك بنجاح!');
   await loadUsers();
-}
-
-// ── KEYS ──
-async function loadKeys() {
-  const { data: keys } = await db.from('access_keys').select('*').order('created_at', { ascending: false });
-  const list = document.getElementById('keys-list');
-  if (!keys || !keys.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">🔑</div>لا توجد مفاتيح بعد</div>'; return; }
-  list.innerHTML = '';
-  keys.forEach(k => {
-    const date = new Date(k.created_at).toLocaleDateString('ar-DZ');
-    const statusBadge = k.is_used
-      ? '<span class="badge badge-expired">مستخدم</span>'
-      : '<span class="badge badge-active">متاح</span>';
-    const usedBy = k.used_by ? `<div class="key-used-by">استخدمه: ${k.used_by}</div>` : '';
-    list.innerHTML += `
-      <div class="key-card">
-        <div>
-          <div class="key-value">${k.key}</div>
-          <div class="key-meta">أنشئ: ${date}</div>
-          ${usedBy}
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          ${statusBadge}
-          <button class="btn btn-ghost btn-sm" onclick="copyKey('${k.key}')">📋 نسخ</button>
-          ${!k.is_used ? `<button class="btn btn-danger btn-sm" onclick="deleteKey('${k.key}')">🗑️</button>` : ''}
-        </div>
-      </div>`;
-  });
-}
-
-async function generateKey() {
-  const input = document.getElementById('new-key-input').value.trim();
-  const key = input || 'KEY-' + Math.random().toString(36).substring(2, 8).toUpperCase();
-  const { error } = await dbWrite(db.from('access_keys').insert({ key, is_used: false, used_by: null }), { context: 'generateKey', message: 'تعذّر إنشاء المفتاح، حاول مرة أخرى.' });
-  if (error) return;
-  document.getElementById('new-key-input').value = '';
-  showToast('✅ تم إنشاء المفتاح: ' + key);
-  await loadKeys();
-}
-
-async function deleteKey(key) {
-  if (!confirm('حذف هذا المفتاح؟')) return;
-  const { error } = await dbWrite(db.from('access_keys').delete().eq('key', key), { context: 'deleteKey', message: 'تعذّر حذف المفتاح، حاول مرة أخرى.' });
-  if (error) return;
-  showToast('🗑️ تم حذف المفتاح');
-  await loadKeys();
-}
-
-function copyKey(key) {
-  navigator.clipboard.writeText(key).then(() => showToast('📋 تم نسخ المفتاح: ' + key));
 }
 
 // ── TABS ──
@@ -1478,15 +1424,13 @@ function switchTab(tab) {
   document.querySelectorAll('.tabs > .tab-btn').forEach((b, i) => {
     b.classList.toggle('active',
       (i === 0 && tab === 'users') ||
-      (i === 1 && tab === 'keys') ||
-      (i === 2 && tab === 'content') ||
-      (i === 3 && tab === 'components') ||
-      (i === 4 && tab === 'review') ||
-      (i === 5 && tab === 'exams')
+      (i === 1 && tab === 'content') ||
+      (i === 2 && tab === 'components') ||
+      (i === 3 && tab === 'review') ||
+      (i === 4 && tab === 'exams')
     );
   });
   document.getElementById('tab-users').classList.toggle('active', tab === 'users');
-  document.getElementById('tab-keys').classList.toggle('active', tab === 'keys');
   document.getElementById('tab-content').classList.toggle('active', tab === 'content');
   document.getElementById('tab-components').classList.toggle('active', tab === 'components');
   document.getElementById('tab-review').classList.toggle('active', tab === 'review');

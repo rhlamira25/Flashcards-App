@@ -181,10 +181,6 @@
   .pending-icon { font-size: 3rem; margin-bottom: 16px; }
   .pending-title { font-family: 'Amiri', serif; font-size: 1.4rem; color: var(--accent); margin-bottom: 10px; }
   .pending-desc { font-size: 0.85rem; color: var(--text-sub); line-height: 1.7; margin-bottom: 28px; }
-  .key-input-wrap { margin-bottom: 16px; }
-  .key-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0; }
-  .key-divider-line { flex: 1; height: 1px; background: var(--border); }
-  .key-divider-text { font-size: 0.75rem; color: var(--text-muted); }
 
   /* ── TOPBAR ── */
   .topbar {
@@ -1069,24 +1065,15 @@ select.form-input{appearance:auto;}
 <div id="pg-pending" class="page">
   <div class="pending-box">
     <div class="pending-icon">⏳</div>
-    <div class="pending-title">في انتظار التفعيل</div>
+    <div class="pending-title">حسابك قيد المراجعة ⏳</div>
     <div class="pending-desc">
-      تم تسجيل حسابك بنجاح.<br>
-      في انتظار موافقة المشرف للوصول إلى المحتوى.<br><br>
-      إذا حصلت على مفتاح وصول، أدخله أدناه للدخول الفوري.
+      تم تسجيل حسابك بنجاح، لكن لم يتم تفعيله بعد.<br><br>
+      📧 تفقد بريدك الإلكتروني، بما في ذلك مجلد الرسائل غير المرغوب فيها، لمعرفة الخطوات التالية.<br><br>
+      بعد إتمام الاشتراك وتفعيل حسابك، ستصلك رسالة تأكيد تخبرك بأن حسابك أصبح جاهزًا للاستعمال.<br>
+      بعدها سجّل الدخول مجددًا للوصول إلى المنصة.
     </div>
     <div id="pending-error" class="auth-error"></div>
     <div id="pending-success" class="auth-success"></div>
-    <div class="key-input-wrap">
-      <label class="form-label">مفتاح الوصول</label>
-      <input type="text" class="form-input" id="access-key-input" placeholder="أدخل مفتاح الوصول هنا..." style="direction:ltr;text-align:center;letter-spacing:0.1em;">
-    </div>
-    <button class="btn btn-primary" onclick="submitAccessKey()" id="key-btn">تفعيل المفتاح 🔑</button>
-    <div class="key-divider">
-      <div class="key-divider-line"></div>
-      <div class="key-divider-text">أو</div>
-      <div class="key-divider-line"></div>
-    </div>
     <button class="btn btn-secondary" onclick="handleLogout()" style="width:100%">تسجيل الخروج</button>
   </div>
 </div>
@@ -1783,34 +1770,6 @@ async function checkUserAccess(user) {
   }
 }
 
-async function submitAccessKey() {
-  const key = document.getElementById('access-key-input').value.trim();
-  if (!key) { showError('pending-error', 'يرجى إدخال المفتاح'); return; }
-  const btn = document.getElementById('key-btn');
-  btn.disabled = true; btn.textContent = '...جاري التحقق';
-
-  // Atomic, server-side: validates the key, consumes it, and updates the profile in one
-  // transaction — the client never touches access_keys or the profile's privileged fields directly.
-  const { data: result, error: rpcErr } = await db.rpc('redeem_access_key', { key_input: key });
-
-  if (rpcErr) {
-    btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
-    showError('pending-error', 'تعذّر التحقق من المفتاح، حاول مرة أخرى');
-    return;
-  }
-  if (!result || !result.success) {
-    btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
-    showError('pending-error', 'المفتاح غير صحيح أو مستخدم مسبقاً');
-    return;
-  }
-
-  btn.disabled = false; btn.textContent = 'تفعيل المفتاح 🔑';
-  showSuccess('pending-success', '✅ تم التفعيل! جاري الدخول...');
-  setTimeout(async () => {
-    document.getElementById('user-email-display').textContent = currentUser.email;
-    await initApp();
-  }, 1500);
-}
 
 async function handleLogout() {
   await db.auth.signOut();
