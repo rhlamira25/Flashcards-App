@@ -1975,7 +1975,7 @@ function renderDynGroupBtns() {
   const rowStyle = 'width:100%;display:block;text-align:right;padding:12px 14px;border:none;border-bottom:1px solid var(--input-border,#e0d5c5);background:transparent;font-family:Cairo,sans-serif;font-size:0.85rem;cursor:pointer;';
   let html = groups.map(g => {
     const selected = parseInt(g) === currentGroup;
-    return `<button type="button" class="dyn-group-row" style="${rowStyle}${selected?'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);':'color:var(--text);'}" onclick="switchGroup(${g})">${names[g]}${selected?' ✓':''}</button>`;
+    return `<button type="button" class="dyn-group-row" style="${rowStyle}${selected?'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);':'color:var(--text);'}" onclick="switchGroup(${g})">${escapeHtml(names[g])}${selected?' ✓':''}</button>`;
   }).join('');
   const allSelected = currentGroup === 'all';
   html += `<button type="button" class="dyn-group-row" style="${rowStyle}border-bottom:none;${allSelected?'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);':'color:var(--text);'}" onclick="switchGroup('all')">الكل${allSelected?' ✓':''}</button>`;
@@ -2438,7 +2438,14 @@ async function openReviewHub() {
   // the backlog across upcoming sessions instead of dumping it all into today.
   if (currentPlan && currentPlan.status === 'active') {
     const learnSummary = await reconcileMissedPlanSessions(currentPlan);
-    if (learnSummary) showPlanChangePopup(learnSummary);
+    if (learnSummary) {
+      showPlanChangePopup(learnSummary);
+      // Dashboard stats above (due count, learn button, progress line, next
+      // session/review) were computed from the pre-reconciliation schedule --
+      // refresh them now that plan_concepts has actually changed. Only runs
+      // on this branch, so the common "nothing missed" case pays no extra cost.
+      await refreshPlanStatus();
+    }
   }
 
   // §6 adaptive scheduler: same anti-accumulation principle for reviews —
@@ -2652,7 +2659,7 @@ function renderNextPlanPopup() {
   const isLearning = summary.kind === 'learning';
   document.getElementById('plan-change-title').textContent = isLearning ? '📅 تم تحديث خطتك' : '🔄 تم تعديل خطة المراجعة';
   document.getElementById('plan-change-desc').textContent = isLearning
-    ? 'لاحظنا أنك فاتتك جلسة حفظ. قمنا بإعادة توزيع المصطلحات المتأثرة على جلساتك القادمة حتى لا تضطر لحفظ عدد كبير منها دفعة واحدة.'
+    ? 'لاحظنا أنك فاتتك جلسة حفظ. تم توزيع المصطلحات الفائتة على الأيام القادمة مع الحفاظ على ترتيبها، حتى لا تضطر لحفظ عدد كبير منها دفعة واحدة.'
     : 'لاحظنا تراكماً في مراجعاتك المستحقة. قمنا بنقل بعض المراجعات الأقل إلحاحاً إلى الأيام القادمة، مع إبقاء المصطلحات الأكثر أهمية (الحرجة والضعيفة) اليوم.';
 
   const fmtSchedule = (sched) => Object.keys(sched).sort().map(d => `${d}: ${sched[d]}`).join(' · ');
@@ -2660,7 +2667,7 @@ function renderNextPlanPopup() {
   document.getElementById('plan-change-new').textContent = fmtSchedule(summary.newSchedule);
 
   document.getElementById('plan-change-stats').innerHTML = `
-    <div>📦 عدد المصطلحات المنقولة: <strong>${summary.movedCount}</strong></div>
+    <div>📦 ${isLearning ? 'عدد المصطلحات المعاد توزيعها' : 'عدد المصطلحات المنقولة'}: <strong>${summary.movedCount}</strong></div>
     ${isLearning ? `<div>📚 تاريخ إتمام الحفظ الجديد: <strong>${summary.newCompletionDate}</strong></div>` : ''}
     ${isLearning ? `<div>🕊️ فترة المراجعة قبل الامتحان: <strong>${summary.bufferDays} يوم</strong></div>` : ''}
     ${summary.targetDate ? `<div>🎓 تاريخ الامتحان: <strong>${summary.targetDate}</strong></div>` : ''}
@@ -2930,7 +2937,7 @@ function renderPlanScopeOptions() {
     subjects.forEach(subj => contentTypes.forEach(ct => {
       const names = getGroupNames(subj, ct, tri);
       Object.keys(names).sort((a,b)=>parseInt(a)-parseInt(b)).forEach(g => {
-        html += `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text);padding:4px 0;"><input type="checkbox" class="ps-group-cb" data-subject="${subj}" data-ct="${ct}" data-group="${g}"> ${subj==='history'?'التاريخ':'الجغرافيا'} — ${CONTENT_TYPE_LABELS[ct]||ct} — ${names[g]}</label>`;
+        html += `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text);padding:4px 0;"><input type="checkbox" class="ps-group-cb" data-subject="${subj}" data-ct="${ct}" data-group="${g}"> ${subj==='history'?'التاريخ':'الجغرافيا'} — ${CONTENT_TYPE_LABELS[ct]||ct} — ${escapeHtml(names[g])}</label>`;
       });
     }));
     listEl.innerHTML = html || '<div style="font-size:0.8rem;color:var(--text-sub);">اختر مادة ونوع محتوى أولاً</div>';
@@ -2949,7 +2956,7 @@ function renderPlanWordChecklist() {
     const node = ((ALL_WORDS_DB[subj]||{})[ct]||{})[tri] || {};
     Object.keys(node).sort((a,b)=>parseInt(a)-parseInt(b)).forEach(g => {
       const words = node[g];
-      html += `<div style="font-size:0.75rem;color:var(--text-sub);margin:8px 0 4px;">${subj==='history'?'التاريخ':'الجغرافيا'} — ${CONTENT_TYPE_LABELS[ct]||ct} — ${words[0]?.group_name || g}</div>`;
+      html += `<div style="font-size:0.75rem;color:var(--text-sub);margin:8px 0 4px;">${subj==='history'?'التاريخ':'الجغرافيا'} — ${CONTENT_TYPE_LABELS[ct]||ct} — ${escapeHtml(words[0]?.group_name || String(g))}</div>`;
       words.forEach(w => {
         html += `<label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--text);padding:2px 0;"><input type="checkbox" class="ps-word-cb" data-word-id="${w.id}" data-subject="${subj}" data-ct="${ct}" onchange="updatePlanWordsCount()"> ${escapeHtml(w.term)}</label>`;
       });
@@ -3423,7 +3430,7 @@ async function checkOutsideActivity(plan) {
   document.getElementById('outside-activity-list').innerHTML = detectedWords.map(w => `
     <label style="display:flex;align-items:center;gap:8px;padding:6px 4px;font-size:0.8rem;cursor:pointer;">
       <input type="checkbox" class="outside-activity-cb" data-word-id="${w.word_id}" checked>
-      <span>${w.words?.term || ''}</span>
+      <span>${escapeHtml(w.words?.term || '')}</span>
     </label>`).join('');
   document.getElementById('outside-activity-overlay').classList.add('active');
 }
@@ -4172,7 +4179,7 @@ function renderDiffFeedback(segments) {
   container.innerHTML = segments.map((seg, idx) => {
     const cls = colorClass[seg.color];
     const clickable = seg.explanation ? ` onclick="showDiffExplain(${idx})"` : '';
-    return `<span class="${cls}"${clickable}>${seg.text}</span>`;
+    return `<span class="${cls}"${clickable}>${escapeHtml(seg.text)}</span>`;
   }).join(' ');
   document.getElementById('rw-diff-tip').style.display = 'none';
 }
@@ -4646,7 +4653,7 @@ function searchWords(query) {
   results.innerHTML = matches.map(w => `
     <div onclick="showSearchResult(${w.id})" style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;">
       <div style="font-weight:700;color:var(--accent);font-size:0.85rem;">${escapeHtml(w.term)}</div>
-      <div style="font-size:0.75rem;color:var(--text-sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${w.def.substring(0,80)}...</div>
+      <div style="font-size:0.75rem;color:var(--text-sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(w.def.substring(0,80))}...</div>
     </div>`).join('');
 }
 

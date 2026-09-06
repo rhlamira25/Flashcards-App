@@ -1238,23 +1238,23 @@ function renderUsers(users) {
 
     if (isPending) {
       badgeHTML = '<span class="badge badge-pending">⏳ في الانتظار</span>';
-      actionsHTML = `<button class="btn btn-success btn-sm" onclick="openApproveModal('${u.email}')">✅ تفعيل</button>
-                     <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.email}')">🗑️ حذف</button>`;
+      actionsHTML = `<button class="btn btn-success btn-sm" onclick="openApproveModal(${escapeHtml(JSON.stringify(u.email))})">✅ تفعيل</button>
+                     <button class="btn btn-danger btn-sm" onclick="deleteUser(${escapeHtml(JSON.stringify(u.email))})">🗑️ حذف</button>`;
     } else if (isExpired) {
       badgeHTML = '<span class="badge badge-expired">🔴 منتهي</span>';
       expiryHTML = `<span class="expiry-info">انتهى في: <span>${expiry.toLocaleDateString('ar-DZ')}</span></span>`;
-      actionsHTML = `<button class="btn btn-success btn-sm" onclick="openRenewModal('${u.email}')">🔄 تجديد</button>
-                     <button class="btn btn-danger btn-sm" onclick="revokeUser('${u.email}')">❌ إلغاء</button>`;
+      actionsHTML = `<button class="btn btn-success btn-sm" onclick="openRenewModal(${escapeHtml(JSON.stringify(u.email))})">🔄 تجديد</button>
+                     <button class="btn btn-danger btn-sm" onclick="revokeUser(${escapeHtml(JSON.stringify(u.email))})">❌ إلغاء</button>`;
     } else if (isActive) {
       const daysLeft = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
       badgeHTML = '<span class="badge badge-active">🟢 نشط</span>';
       expiryHTML = `<span class="expiry-info">ينتهي في: <span>${expiry.toLocaleDateString('ar-DZ')}</span> (${daysLeft} يوم)</span>`;
-      actionsHTML = `<button class="btn btn-ghost btn-sm" onclick="openRenewModal('${u.email}')">🔄 تجديد</button>
-                     <button class="btn btn-danger btn-sm" onclick="revokeUser('${u.email}')">❌ إلغاء</button>`;
+      actionsHTML = `<button class="btn btn-ghost btn-sm" onclick="openRenewModal(${escapeHtml(JSON.stringify(u.email))})">🔄 تجديد</button>
+                     <button class="btn btn-danger btn-sm" onclick="revokeUser(${escapeHtml(JSON.stringify(u.email))})">❌ إلغاء</button>`;
     } else {
       badgeHTML = '<span class="badge badge-pending">⚠️ بدون تاريخ</span>';
-      actionsHTML = `<button class="btn btn-ghost btn-sm" onclick="openRenewModal('${u.email}')">🔄 تعيين تاريخ</button>
-                     <button class="btn btn-danger btn-sm" onclick="revokeUser('${u.email}')">❌ إلغاء</button>`;
+      actionsHTML = `<button class="btn btn-ghost btn-sm" onclick="openRenewModal(${escapeHtml(JSON.stringify(u.email))})">🔄 تعيين تاريخ</button>
+                     <button class="btn btn-danger btn-sm" onclick="revokeUser(${escapeHtml(JSON.stringify(u.email))})">❌ إلغاء</button>`;
     }
 
     const date = new Date(u.created_at).toLocaleDateString('ar-DZ');
@@ -1266,7 +1266,7 @@ function renderUsers(users) {
         <div class="user-card-top">
           <div>
             <div class="user-email">${escapeHtml(u.email)}</div>
-            <div style="font-size:0.8rem;color:var(--gold-text);margin-top:2px;font-weight:700;">${fullName}</div>
+            <div style="font-size:0.8rem;color:var(--gold-text);margin-top:2px;font-weight:700;">${escapeHtml(fullName)}</div>
             <div style="font-size:0.72rem;color:var(--text-faint);margin-top:2px;">${studentType} · م: ${dob} · تسجيل: ${date}</div>
           </div>
           <div class="user-status">${badgeHTML}</div>
@@ -1887,10 +1887,10 @@ function renderCompRows() {
         <button class="btn btn-ghost btn-sm" onclick="moveCompRow(${i},1)" ${i===compRows.length-1?'disabled':''}>▼</button>
         <button class="btn btn-danger btn-sm" onclick="removeCompRow(${i})">🗑️</button>
       </div>
-      <input type="text" value="${(c.question||'').replace(/"/g,'&quot;')}" oninput="updateCompField(${i},'question',this.value)" placeholder="السؤال"
+      <input type="text" value="${escapeHtml(c.question||'')}" oninput="updateCompField(${i},'question',this.value)" placeholder="السؤال"
         style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.8rem;margin-bottom:6px;direction:rtl;">
       <textarea oninput="updateCompField(${i},'answer',this.value)" placeholder="الإجابة" rows="2"
-        style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.8rem;direction:rtl;resize:vertical;">${(c.answer||'')}</textarea>
+        style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.8rem;direction:rtl;resize:vertical;">${escapeHtml(c.answer||'')}</textarea>
       <div style="font-size:0.65rem;color:var(--text-faint);margin-top:4px;">${c.source === 'manual' ? '✏️ معدَّل يدوياً' : '🤖 مولَّد تلقائياً'}</div>
     </div>`).join('');
 }
