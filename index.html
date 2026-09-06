@@ -2225,6 +2225,70 @@ const REVIEW_INTERVALS = { critical: 1, weak: 4, fragile: 10, strong: 21 };
 // reliable signal of long-term retention, so even a "Strong" first score gets a short
 // review, not the normal 21-day interval.
 const FIRST_REVIEW_INTERVALS = { critical: 1, weak: 2, fragile: 3, strong: 5 };
+
+// ══════════════════════════════════════
+//  REVISION PHASE — exam-aware scheduling (Phase 7-8, previously stubbed).
+//
+//  Single centralized scheduling decision point, per the "don't scatter exam-proximity
+//  conditionals through multiple components" requirement. All 3 call sites that persist
+//  a review result (persistOneCasualAnswer, persistRewriteTest, persistSecondChanceRetest)
+//  now go through this instead of inlining `addDaysStr(todayStr(), interval)` directly.
+//
+//  Phase is NOT a stored flag -- it's derived from the caller's choice of examDateStr:
+//  - Memorisation phase (plan still active): callers pass examDateStr = null, so this
+//    always falls through to the exact pre-existing behavior (plain proficiency-based
+//    interval, zero exam compression) -- satisfies "do NOT introduce aggressive
+//    exam-proximity compression during Memorisation".
+//  - Revision phase (plan status = 'completed'): callers pass the plan's target_date,
+//    enabling the compression logic below.
+//
+//  Compression logic: the natural proficiency-based interval is respected AS-IS whenever
+//  it would land on or before the exam -- exam proximity is a constraint, not a reset, so
+//  a Strong concept reviewed today with the exam 43 days away still gets its normal
+//  21-day interval untouched. Only when the natural interval would overshoot the exam
+//  does it get capped to land 1 day before the exam (reviewing literally on exam day
+//  itself is too late to help). Since this function is invoked fresh at every actual
+//  review event (not pre-planned in advance), a chain of reviews naturally tightens on
+//  its own as the exam approaches -- e.g. exam day 40: a review on day 7 with 33 days
+//  to go doesn't need compression (7+21=28 <= 40), but if THAT review is Strong again
+//  and next lands on day 28 with only 12 days left, day 28's 21-day interval (->49)
+//  does overshoot and gets capped to day 39 (one day before the exam). No lookahead
+//  or multi-step planning needed -- each review re-evaluates proximity independently.
+//  Missing/invalid/past exam dates fall back to normal scheduling unchanged (never
+//  invents or assumes an exam date).
+// ══════════════════════════════════════
+function calculateNextReviewDate(levelKey, isFirstEver, todayStr_, examDateStr) {
+  const baseInterval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[levelKey];
+
+  if (!examDateStr) return { date: addDaysStr(todayStr_, baseInterval), interval: baseInterval };
+
+  const daysToExam = Math.round((new Date(examDateStr) - new Date(todayStr_)) / 86400000);
+  // Invalid, today, or past exam date -- treat as "no valid future exam date" (item 16).
+  if (!Number.isFinite(daysToExam) || daysToExam <= 0) {
+    return { date: addDaysStr(todayStr_, baseInterval), interval: baseInterval };
+  }
+
+  if (baseInterval <= daysToExam) {
+    return { date: addDaysStr(todayStr_, baseInterval), interval: baseInterval }; // natural interval already lands before the exam
+  }
+
+  // Natural interval would overshoot the exam -- compress so review lands 1 day before it.
+  const compressedInterval = Math.max(1, daysToExam - 1);
+  return { date: addDaysStr(todayStr_, compressedInterval), interval: compressedInterval };
+}
+
+// Phase is derived, never stored: a plan reaching status 'completed' (all plan_concepts
+// learned -- see refreshPlanStatus's existing auto-complete logic) means Memorisation
+// ended and Revision began. No new phase column, per item 15's explicit preference to
+// avoid duplicating state that's already derivable.
+function isRevisionPhase(plan) {
+  return !!(plan && plan.status === 'completed');
+}
+// The exam date to pass into calculateNextReviewDate for a given plan -- only relevant
+// (and only ever supplied) once that plan has actually reached Revision phase.
+function revisionExamDate(plan) {
+  return isRevisionPhase(plan) && plan.target_date ? plan.target_date : null;
+}
 function todayStr() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
@@ -2389,8 +2453,7 @@ async function persistOneCasualAnswer(testId, a) {
     const { data: existingProg } = await db.from('concept_progress').select('id')
       .eq('user_id', currentUser.id).eq('word_id', a.word.id);
     const isFirstEver = !existingProg || existingProg.length === 0;
-    const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
-    const nextReviewAt = addDaysStr(todayStr(), interval);
+    const { date: nextReviewAt, interval } = calculateNextReviewDate(level.key, isFirstEver, todayStr(), revisionExamDate(currentPlan));
 
     const { data: result, error } = await dbWrite(db.rpc('persist_answer_and_progress', {
       p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
@@ -2416,8 +2479,7 @@ async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
       const { data: existingProg } = await db.from('concept_progress').select('id')
         .eq('user_id', currentUser.id).eq('word_id', a.word.id);
       const isFirstEver = !existingProg || existingProg.length === 0;
-      const interval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[level.key];
-      const nextReviewAt = addDaysStr(todayStr(), interval);
+      const { date: nextReviewAt, interval } = calculateNextReviewDate(level.key, isFirstEver, todayStr(), revisionExamDate(currentPlan));
       await dbWrite(db.rpc('persist_answer_and_progress', {
         p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
         p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
@@ -2662,7 +2724,11 @@ function renderNextPlanPopup() {
     ? 'لاحظنا أنك فاتتك جلسة حفظ. تم توزيع المصطلحات الفائتة على الأيام القادمة مع الحفاظ على ترتيبها، حتى لا تضطر لحفظ عدد كبير منها دفعة واحدة.'
     : 'لاحظنا تراكماً في مراجعاتك المستحقة. قمنا بنقل بعض المراجعات الأقل إلحاحاً إلى الأيام القادمة، مع إبقاء المصطلحات الأكثر أهمية (الحرجة والضعيفة) اليوم.';
 
-  const fmtSchedule = (sched) => Object.keys(sched).sort().map(d => `${d}: ${sched[d]}`).join(' · ');
+  // Plain per-day count sequence (e.g. "3 / 3 / 3 / 3 / 3" -> "4 / 4 / 4 / 3 / 3") --
+  // this is the whole point of the fix: showing the workload REDISTRIBUTION as a
+  // count sequence, not a list of "these specific words moved to these dates",
+  // which misrepresents an order-preserving rebalance as arbitrary individual moves.
+  const fmtSchedule = (sched) => Object.keys(sched).sort().map(d => sched[d]).join(' / ');
   document.getElementById('plan-change-old').textContent = fmtSchedule(summary.oldSchedule);
   document.getElementById('plan-change-new').textContent = fmtSchedule(summary.newSchedule);
 
@@ -2777,7 +2843,17 @@ async function refreshPlanStatus() {
   } else if (allPending && allPending.length === 0) {
     learnBtn.style.display = 'none';
     infoLine.textContent = `🎉 أنهيت كل المصطلحات الجديدة في هذه الخطة (${learnedCount}/${totalCount}) — بقيت المراجعات فقط`;
-    if (plan.status === 'active') await dbWrite(db.from('study_plans').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', plan.id), { context: 'auto-complete plan', silent: true });
+    if (plan.status === 'active') {
+      const { error: completeErr } = await dbWrite(db.from('study_plans').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', plan.id), { context: 'auto-complete plan', silent: true });
+      // This block only ever runs once per plan -- plan.status flips to 'completed' in the
+      // DB the moment this succeeds, so refreshPlanStatus's own fetch above will never see
+      // status:'active' for this plan again. That's exactly the "exact moment of transition"
+      // signal needed for a one-time popup, with no extra tracking required beyond this guard.
+      if (!completeErr && !plan.completion_popup_shown) {
+        await showCompletionPopup({ ...plan, status: 'completed' });
+        await dbWrite(db.from('study_plans').update({ completion_popup_shown: true }).eq('id', plan.id), { context: 'mark completion popup shown', silent: true });
+      }
+    }
   } else {
     learnBtn.style.display = 'none';
     const { data: nextBatch } = await db.from('plan_concepts').select('scheduled_date').eq('plan_id', plan.id).eq('status', 'pending').order('scheduled_date').limit(1);
@@ -2786,6 +2862,62 @@ async function refreshPlanStatus() {
   }
 
   await loadPlanOverview(plan);
+}
+
+// ══════════════════════════════════════
+//  MEMORISATION COMPLETE -> REVISION PHASE TRANSITION POPUP
+//  Display-only: never touches concept_progress or next_review_at, so it cannot
+//  accidentally force a review (item 14). Breakdown counts are queried live from
+//  the actual concept_progress rows for this plan's own concepts -- never
+//  fabricated or approximated (item 13.B).
+// ══════════════════════════════════════
+async function showCompletionPopup(plan) {
+  const { data: planWords } = await db.from('plan_concepts').select('word_id').eq('plan_id', plan.id);
+  const wordIds = [...new Set((planWords || []).map(r => r.word_id))];
+  const counts = { critical: 0, weak: 0, fragile: 0, strong: 0 };
+  if (wordIds.length) {
+    const { data: progressRows } = await db.from('concept_progress').select('proficiency_level').eq('user_id', currentUser.id).in('word_id', wordIds);
+    (progressRows || []).forEach(r => { if (counts[r.proficiency_level] !== undefined) counts[r.proficiency_level]++; });
+  }
+  const totalTracked = counts.critical + counts.weak + counts.fragile + counts.strong;
+
+  let examLine = '';
+  if (plan.target_date) {
+    const daysRemaining = Math.round((new Date(plan.target_date) - new Date(todayStr())) / 86400000);
+    examLine = `<div style="margin-top:8px;">📅 هدفك: <strong>${escapeHtml(plan.target_date)}</strong>${daysRemaining >= 0 ? ` — متبقٍ <strong>${daysRemaining}</strong> يوم` : ''}</div>`;
+  }
+
+  document.getElementById('completion-popup-body').innerHTML = `
+    <div style="text-align:center;font-size:1rem;font-weight:800;margin-bottom:4px;">🎉 أنهيت مرحلة الحفظ!</div>
+    <div style="text-align:center;font-size:0.82rem;color:var(--text-sub);margin-bottom:14px;">لقد حفظت ${totalTracked} مصطلح بنجاح</div>
+
+    <div style="font-size:0.85rem;font-weight:700;margin-bottom:8px;">مستواك الحالي</div>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;font-size:0.85rem;">
+      <div style="display:flex;justify-content:space-between;"><span>🟢 قوي</span><strong>${counts.strong}</strong></div>
+      <div style="display:flex;justify-content:space-between;"><span>🟡 هش</span><strong>${counts.fragile}</strong></div>
+      <div style="display:flex;justify-content:space-between;"><span>🟠 ضعيف</span><strong>${counts.weak}</strong></div>
+      <div style="display:flex;justify-content:space-between;"><span>🔴 حرج</span><strong>${counts.critical}</strong></div>
+    </div>
+
+    <div style="font-size:0.78rem;color:var(--text-sub);line-height:1.8;margin-bottom:14px;">
+      <div><strong>🟢 قوي:</strong> تتذكر هذه المصطلحات جيداً، ستتم مراجعتها لكن بشكل أقل تكراراً.</div>
+      <div><strong>🟡 هش:</strong> تعرفها لكنها تحتاج تعزيزاً.</div>
+      <div><strong>🟠 ضعيف:</strong> تحتاج مراجعة أكثر تكراراً.</div>
+      <div><strong>🔴 حرج:</strong> أولوية قصوى، تحتاج مراجعة متكررة جداً.</div>
+    </div>
+
+    <div style="font-size:0.85rem;font-weight:700;margin-bottom:6px;">المرحلة القادمة: المراجعة 📖</div>
+    <div style="font-size:0.78rem;color:var(--text-sub);line-height:1.8;">
+      لا حاجة لحفظ مصطلحات جديدة الآن. ستستمر مراجعة ما حفظته حسب مستوى إتقانك لكل مصطلح —
+      المصطلحات القوية لن تختفي من المراجعة، لكنها ستُراجَع بوتيرة أقل. كلما اقترب موعد
+      الامتحان، يأخذ الجدول ذلك بعين الاعتبار لضمان مراجعة أخيرة لكل مصطلح قبل الامتحان.
+      ${examLine}
+    </div>
+  `;
+  document.getElementById('completion-popup-overlay').classList.add('active');
+}
+function closeCompletionPopup() {
+  document.getElementById('completion-popup-overlay').classList.remove('active');
 }
 
 // §13 (Phase D): fuller plan overview — pulls entirely from real scheduling
@@ -4474,8 +4606,8 @@ async function persistSecondChanceRetest(answers, initialScores) {
       // actual retest score, since the student did genuinely demonstrate it.
       const realLevel = classifyProficiency(a.match.score);
       const intervalLevelKey = downgradeLevelKey(realLevel.key);
-      const interval = REVIEW_INTERVALS[intervalLevelKey]; // never a "first ever" test at this point — it's a review retest
-      const nextReviewAt = addDaysStr(todayStr(), interval);
+      // never a "first ever" test at this point — it's a review retest
+      const { date: nextReviewAt, interval } = calculateNextReviewDate(intervalLevelKey, false, todayStr(), revisionExamDate(currentPlan));
 
       if (testId) {
         await dbWrite(db.rpc('persist_answer_and_progress', {
@@ -4843,6 +4975,14 @@ function checkUrlAuthError() {
     <div id="plan-change-details-list" style="font-size:0.78rem;max-height:150px;overflow-y:auto;margin-bottom:14px;"></div>
 
     <button class="btn btn-primary" style="width:100%;" onclick="closePlanChangePopup()">فهمت ✓</button>
+  </div>
+</div>
+
+<!-- MEMORISATION COMPLETE -> REVISION PHASE popup -->
+<div class="kb-explainer-overlay" id="completion-popup-overlay">
+  <div class="plan-change-box">
+    <div id="completion-popup-body" style="max-height:65vh;overflow-y:auto;"></div>
+    <button class="btn btn-primary" style="width:100%;margin-top:12px;" onclick="closeCompletionPopup()">فهمت ✓</button>
   </div>
 </div>
 
