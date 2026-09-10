@@ -2052,7 +2052,7 @@ function getDraftKey(mode) {
 async function loadAndRefresh() {
   progress = JSON.parse(localStorage.getItem(getStorageKey()) || '{"scores":{},"sessions":0}');
   WORDS.forEach(w => { if (!progress.scores[w.id]) progress.scores[w.id] = { qcm: null, rewrite: null }; });
-  updateGroupBadge(); refreshDash();
+  updateGroupBadge(); await refreshDash();
 }
 
 function saveProgress() { localStorage.setItem(getStorageKey(), JSON.stringify(progress)); }
@@ -2061,26 +2061,42 @@ function loadDraft(mode) { try { return JSON.parse(localStorage.getItem(getDraft
 function clearDraft(mode) { localStorage.removeItem(getDraftKey(mode)); }
 
 // ══════════════════════════════════════
+//  LIVE MASTERY (concept_progress is the single source of truth for CURRENT
+//  mastery -- localStorage progress.scores stays around for its other
+//  legitimate uses: raw per-test QCM/rewrite scores, session count, draft
+//  resume state -- but is no longer used to compute "overall %" / "mastered
+//  count" / mastery dot colors anywhere. Those now always reflect whatever
+//  concept_progress actually says right now, live, even if it changed via a
+//  path this screen didn't drive (e.g. a plan review, or an outside-plan test).
+// ══════════════════════════════════════
+async function fetchLiveMastery(wordIds) {
+  const map = new Map();
+  if (!wordIds || !wordIds.length) return map;
+  const { data: rows, error } = await db.from('concept_progress')
+    .select('word_id, current_proficiency, proficiency_level')
+    .eq('user_id', currentUser.id).in('word_id', wordIds);
+  if (error) { console.error('fetchLiveMastery failed:', error); return map; }
+  (rows || []).forEach(r => map.set(r.word_id, { proficiency: r.current_proficiency, level: r.proficiency_level }));
+  return map;
+}
+// Same "mastered" bar (>=70%) and same dot-coloring the UI always used -- only
+// the SOURCE changed (live concept_progress instead of averaged local scores),
+// not the threshold/semantics, so this is a source fix, not a behavior change.
+function computeMasteryStats(words, liveMastery) {
+  let total = 0, count = 0, mastered = 0;
+  const dotColors = words.map(w => {
+    const m = liveMastery.get(w.id);
+    if (!m) return 'var(--track)';
+    total += m.proficiency; count++;
+    if (m.proficiency >= 70) mastered++;
+    return barColor(m.proficiency);
+  });
+  return { overall: count ? Math.round(total / count) : 0, mastered, dotColors };
+}
+
+// ══════════════════════════════════════
 //  DASHBOARD
 // ══════════════════════════════════════
-function calcOverall() {
-  let total = 0, count = 0;
-  WORDS.forEach(w => {
-    const s = progress.scores[w.id];
-    if (!s) return;
-    if (s.qcm !== null) { total += s.qcm; count++; }
-    if (s.rewrite !== null) { total += s.rewrite; count++; }
-  });
-  return count ? Math.round(total/count) : 0;
-}
-function calcMastered() {
-  return WORDS.filter(w => {
-    const s = progress.scores[w.id];
-    if (!s) return false;
-    const scores = [s.qcm, s.rewrite].filter(x => x !== null);
-    return scores.length > 0 && scores.reduce((a,b)=>a+b,0)/scores.length >= 70;
-  }).length;
-}
 function barColor(v) { return v >= 70 ? '#4aaa70' : v >= 40 ? '#c9a84c' : '#aa4a4a'; }
 function setBar(id, v) { const el = document.getElementById(id); if (!el) return; el.style.width = v+'%'; el.style.background = barColor(v); }
 function updatePills(overall) { document.querySelectorAll('.pill').forEach(p => p.textContent = overall+'%'); }
@@ -2151,16 +2167,15 @@ function computeStreak(snapshotRows) {
 }
 
 
-function refreshDash() {
-  const overall = calcOverall(), mastered = calcMastered();
+async function refreshDash() {
+  const liveMastery = await fetchLiveMastery(WORDS.map(w => w.id));
+  const { overall, mastered, dotColors } = computeMasteryStats(WORDS, liveMastery);
   document.getElementById('dash-overall').textContent = overall+'%';
   document.getElementById('dash-mastered').innerHTML = mastered+' <small>/ '+WORDS.length+'</small>';
   setBar('dash-bar', overall); updatePills(overall);
   const dots = document.getElementById('dash-dots'); dots.innerHTML = '';
-  WORDS.forEach(w => {
-    const s = progress.scores[w.id]; let color = 'var(--track)';
-    if (s) { const sc = [s.qcm,s.rewrite].filter(x=>x!==null); if (sc.length) color = barColor(sc.reduce((a,b)=>a+b,0)/sc.length); }
-    const d = document.createElement('div'); d.className = 'dot'; d.title = w.term; d.style.background = color; dots.appendChild(d);
+  WORDS.forEach((w, i) => {
+    const d = document.createElement('div'); d.className = 'dot'; d.title = w.term; d.style.background = dotColors[i]; dots.appendChild(d);
   });
   document.getElementById('dash-sessions').textContent = (progress.sessions||0) ? `${progress.sessions} جلسة مكتملة` : 'ابدأ أول اختبار!';
   const qd = loadDraft('qcm');
@@ -2172,20 +2187,34 @@ function refreshDash() {
 // ══════════════════════════════════════
 //  FLASHCARD
 // ══════════════════════════════════════
-function showFlashcard() { fcIdx = 0; renderFC(); showPage('flashcard'); }
+let fcLiveMastery = new Map();
+async function showFlashcard() {
+  fcIdx = 0;
+  fcLiveMastery = await fetchLiveMastery(WORDS.map(w => w.id)); // one batch fetch, not per-card
+  renderFC();
+  showPage('flashcard');
+}
 function renderFC() {
   const w = WORDS[fcIdx];
   document.getElementById('fc-term').textContent = w.term;
   document.getElementById('fc-def').textContent = w.def;
   document.getElementById('fc-counter').textContent = (fcIdx+1)+' / '+WORDS.length;
   const s = progress.scores[w.id]; const sc = document.getElementById('fc-scores'); sc.innerHTML = '';
+  // Historical/raw per-test scores -- kept as-is, these are legitimately just
+  // "what did you score last time", not a claim about current mastery.
   if (s) { if (s.qcm!==null) sc.innerHTML+=`<span class="score-tag">QCM: ${s.qcm}%</span>`; if (s.rewrite!==null) sc.innerHTML+=`<span class="score-tag">كتابة: ${s.rewrite}%</span>`; }
+  // Current mastery -- distinct from the above, always from concept_progress live.
+  const live = fcLiveMastery.get(w.id);
+  if (live) {
+    const level = PROFICIENCY_LEVELS.find(l => l.key === live.level);
+    sc.innerHTML += `<span class="score-tag" style="background:${barColor(live.proficiency)};color:#fff;">الإتقان الحالي: ${live.proficiency}%${level ? ' '+level.emoji : ''}</span>`;
+  }
   document.getElementById('card-inner').classList.remove('flipped');
 }
 function flipCard() { document.getElementById('card-inner').classList.toggle('flipped'); }
 function fcNext() { if (fcIdx < WORDS.length-1) { fcIdx++; renderFC(); } }
 function fcPrev() { if (fcIdx > 0) { fcIdx--; renderFC(); } }
-function goMenu() { showPage('menu'); refreshDash(); }
+async function goMenu() { showPage('menu'); await refreshDash(); }
 
 // ══════════════════════════════════════
 //  HELPERS
@@ -2227,56 +2256,20 @@ const REVIEW_INTERVALS = { critical: 1, weak: 4, fragile: 10, strong: 21 };
 const FIRST_REVIEW_INTERVALS = { critical: 1, weak: 2, fragile: 3, strong: 5 };
 
 // ══════════════════════════════════════
-//  REVISION PHASE — exam-aware scheduling (Phase 7-8, previously stubbed).
+//  REVISION PHASE — exam-aware scheduling.
 //
-//  Single centralized scheduling decision point, per the "don't scatter exam-proximity
-//  conditionals through multiple components" requirement. All 3 call sites that persist
-//  a review result (persistOneCasualAnswer, persistRewriteTest, persistSecondChanceRetest)
-//  now go through this instead of inlining `addDaysStr(todayStr(), interval)` directly.
+//  IMPORTANT: the values above (REVIEW_INTERVALS/FIRST_REVIEW_INTERVALS) and the
+//  compression algorithm they used to feed into a client-side calculateNextReviewDate()
+//  are now mirrored SERVER-SIDE inside persist_answer_and_progress -- the client no
+//  longer computes or submits proficiency_level/next_review_at/interval at all (see
+//  that RPC's definition for the authoritative logic). This block intentionally no
+//  longer contains a client-side scheduling function, to avoid a second, driftable
+//  copy of logic that must never be trusted as authoritative again.
 //
-//  Phase is NOT a stored flag -- it's derived from the caller's choice of examDateStr:
-//  - Memorisation phase (plan still active): callers pass examDateStr = null, so this
-//    always falls through to the exact pre-existing behavior (plain proficiency-based
-//    interval, zero exam compression) -- satisfies "do NOT introduce aggressive
-//    exam-proximity compression during Memorisation".
-//  - Revision phase (plan status = 'completed'): callers pass the plan's target_date,
-//    enabling the compression logic below.
-//
-//  Compression logic: the natural proficiency-based interval is respected AS-IS whenever
-//  it would land on or before the exam -- exam proximity is a constraint, not a reset, so
-//  a Strong concept reviewed today with the exam 43 days away still gets its normal
-//  21-day interval untouched. Only when the natural interval would overshoot the exam
-//  does it get capped to land 1 day before the exam (reviewing literally on exam day
-//  itself is too late to help). Since this function is invoked fresh at every actual
-//  review event (not pre-planned in advance), a chain of reviews naturally tightens on
-//  its own as the exam approaches -- e.g. exam day 40: a review on day 7 with 33 days
-//  to go doesn't need compression (7+21=28 <= 40), but if THAT review is Strong again
-//  and next lands on day 28 with only 12 days left, day 28's 21-day interval (->49)
-//  does overshoot and gets capped to day 39 (one day before the exam). No lookahead
-//  or multi-step planning needed -- each review re-evaluates proximity independently.
-//  Missing/invalid/past exam dates fall back to normal scheduling unchanged (never
-//  invents or assumes an exam date).
+//  isRevisionPhase/revisionExamDate below remain purely for non-authoritative UI
+//  purposes (e.g. deciding which screen/banner to show, displaying "days remaining"),
+//  never for computing a review date that gets persisted.
 // ══════════════════════════════════════
-function calculateNextReviewDate(levelKey, isFirstEver, todayStr_, examDateStr) {
-  const baseInterval = (isFirstEver ? FIRST_REVIEW_INTERVALS : REVIEW_INTERVALS)[levelKey];
-
-  if (!examDateStr) return { date: addDaysStr(todayStr_, baseInterval), interval: baseInterval };
-
-  const daysToExam = Math.round((new Date(examDateStr) - new Date(todayStr_)) / 86400000);
-  // Invalid, today, or past exam date -- treat as "no valid future exam date" (item 16).
-  if (!Number.isFinite(daysToExam) || daysToExam <= 0) {
-    return { date: addDaysStr(todayStr_, baseInterval), interval: baseInterval };
-  }
-
-  if (baseInterval <= daysToExam) {
-    return { date: addDaysStr(todayStr_, baseInterval), interval: baseInterval }; // natural interval already lands before the exam
-  }
-
-  // Natural interval would overshoot the exam -- compress so review lands 1 day before it.
-  const compressedInterval = Math.max(1, daysToExam - 1);
-  return { date: addDaysStr(todayStr_, compressedInterval), interval: compressedInterval };
-}
-
 // Phase is derived, never stored: a plan reaching status 'completed' (all plan_concepts
 // learned -- see refreshPlanStatus's existing auto-complete logic) means Memorisation
 // ended and Revision began. No new phase column, per item 15's explicit preference to
@@ -2284,8 +2277,8 @@ function calculateNextReviewDate(levelKey, isFirstEver, todayStr_, examDateStr) 
 function isRevisionPhase(plan) {
   return !!(plan && plan.status === 'completed');
 }
-// The exam date to pass into calculateNextReviewDate for a given plan -- only relevant
-// (and only ever supplied) once that plan has actually reached Revision phase.
+// UI-display only (e.g. "days remaining" banners) -- the server independently re-derives
+// the exam date itself from the caller's own completed plan when computing a real schedule.
 function revisionExamDate(plan) {
   return isRevisionPhase(plan) && plan.target_date ? plan.target_date : null;
 }
@@ -2449,16 +2442,12 @@ let currentCasualTestId = null;
 async function persistOneCasualAnswer(testId, a) {
   if (!testId) return null;
   try {
-    const level = classifyProficiency(a.match.score);
-    const { data: existingProg } = await db.from('concept_progress').select('id')
-      .eq('user_id', currentUser.id).eq('word_id', a.word.id);
-    const isFirstEver = !existingProg || existingProg.length === 0;
-    const { date: nextReviewAt, interval } = calculateNextReviewDate(level.key, isFirstEver, todayStr(), revisionExamDate(currentPlan));
-
+    // Server derives proficiency_level, next_review_at, and interval from p_score
+    // itself now (including exam-aware compression) -- the client no longer computes
+    // or sends any of these authoritative scheduling values.
     const { data: result, error } = await dbWrite(db.rpc('persist_answer_and_progress', {
       p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
-      p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
-      p_proficiency_level: level.key, p_next_review_at: nextReviewAt, p_interval: interval
+      p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score
     }), { context: 'persistOneCasualAnswer', message: 'تعذّر حفظ الإجابة، حاول مرة أخرى.' });
     if (error || !result) return null;
     return result.id;
@@ -2475,15 +2464,9 @@ async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
     if (testErr || !testId) { console.error('persistRewriteTest create_rewrite_test failed:', testErr); return false; }
 
     for (const a of answers) {
-      const level = classifyProficiency(a.match.score);
-      const { data: existingProg } = await db.from('concept_progress').select('id')
-        .eq('user_id', currentUser.id).eq('word_id', a.word.id);
-      const isFirstEver = !existingProg || existingProg.length === 0;
-      const { date: nextReviewAt, interval } = calculateNextReviewDate(level.key, isFirstEver, todayStr(), revisionExamDate(currentPlan));
       await dbWrite(db.rpc('persist_answer_and_progress', {
         p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
-        p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
-        p_proficiency_level: level.key, p_next_review_at: nextReviewAt, p_interval: interval
+        p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score
       }), { context: 'persistRewriteTest answer+progress', silent: true }); // batch loop — one toast per test, not per word
     }
     return true;
@@ -4375,9 +4358,10 @@ function restartQCM() {
   qcmQuestions=shuffle(WORDS).map(w=>({word:w,opts:genOptions(w)})); qcmIdx=0; qcmSelected=false; qcmAnswers=[];
   saveDraft('qcm',{questions:qcmQuestions.map(q=>q.word.id),answers:[]}); renderQCM();
 }
-function showResultsQCM() {
+async function showResultsQCM() {
   const correct=qcmAnswers.filter(a=>a.correct).length, pct=Math.round(correct/qcmAnswers.length*100);
-  const overall=calcOverall(), mastered=calcMastered();
+  const liveMastery = await fetchLiveMastery(WORDS.map(w => w.id));
+  const { overall, mastered } = computeMasteryStats(WORDS, liveMastery);
   document.getElementById('res-emoji').textContent = pct>=80?'🏆':pct>=60?'👍':'📚';
   document.getElementById('res-score').textContent = pct+'%'; document.getElementById('res-score').style.color=barColor(pct);
   setBar('res-bar',pct); document.getElementById('res-overall').textContent=overall+'%';
@@ -4586,11 +4570,8 @@ function beginSecondChanceRetest() {
   enterRewritePage();
 }
 
-const LEVEL_ORDER = ['critical', 'weak', 'fragile', 'strong'];
-function downgradeLevelKey(levelKey) {
-  const idx = LEVEL_ORDER.indexOf(levelKey);
-  return LEVEL_ORDER[Math.max(0, idx - 1)];
-}
+// LEVEL_ORDER/downgradeLevelKey removed -- the one-tier-down interval logic for
+// second-chance retests now lives server-side in persist_answer_and_progress.
 
 async function persistSecondChanceRetest(answers, initialScores) {
   try {
@@ -4601,19 +4582,14 @@ async function persistSecondChanceRetest(answers, initialScores) {
     if (testErr) return;
 
     for (const a of answers) {
-      // Conservative update: real level from the retest score, downgraded one
-      // tier for INTERVAL purposes only — current_proficiency still shows the
-      // actual retest score, since the student did genuinely demonstrate it.
-      const realLevel = classifyProficiency(a.match.score);
-      const intervalLevelKey = downgradeLevelKey(realLevel.key);
-      // never a "first ever" test at this point — it's a review retest
-      const { date: nextReviewAt, interval } = calculateNextReviewDate(intervalLevelKey, false, todayStr(), revisionExamDate(currentPlan));
-
+      // The server derives the real proficiency level from p_score, and applies
+      // the one-tier-down interval adjustment itself when p_is_second_chance is
+      // true (current_proficiency still reflects the actual retest score, since
+      // the student did genuinely demonstrate it -- only the interval is conservative).
       if (testId) {
         await dbWrite(db.rpc('persist_answer_and_progress', {
           p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
           p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score,
-          p_proficiency_level: realLevel.key, p_next_review_at: nextReviewAt, p_interval: interval,
           p_is_second_chance: true, p_initial_score_before_retest: initialScores[a.word.id] ?? null
         }), { context: 'persistSecondChanceRetest answer+progress', silent: true });
       }
@@ -4730,7 +4706,7 @@ async function nextRW() {
     if (finalizeErr) console.error('nextRW finalize casual test failed:', finalizeErr);
   }
   currentCasualTestId = null;
-  showResultsRW();
+  await showResultsRW();
 }
 async function restartRW() {
   clearDraft('rewrite'); document.getElementById('rw-resume-bar').style.display='none';
@@ -4743,9 +4719,10 @@ async function restartRW() {
   currentCasualTestId = testId || null;
   saveDraft('rewrite',{questions:rwQuestions.map(w=>w.id),answers:[],testId:currentCasualTestId}); renderRW();
 }
-function showResultsRW() {
+async function showResultsRW() {
   const avg=Math.round(rwAnswers.reduce((s,a)=>s+a.match.score,0)/rwAnswers.length);
-  const overall=calcOverall(), mastered=calcMastered();
+  const liveMastery = await fetchLiveMastery(WORDS.map(w => w.id));
+  const { overall, mastered } = computeMasteryStats(WORDS, liveMastery);
   document.getElementById('res-badge').textContent='';
   const retryBtn = document.querySelector('#pg-results .nav .btn-ghost');
   retryBtn.textContent = 'إعادة ↺'; retryBtn.onclick = retryLast;
