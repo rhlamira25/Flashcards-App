@@ -1844,6 +1844,14 @@ function getGroupNames(subject, contentType, trimester) {
   Object.keys(node).forEach(g => { names[g] = node[g][0]?.group_name || `المجموعة ${g}`; });
   return names;
 }
+// The lowest group_number that actually has words for this subject/content-type/trimester.
+// Group numbers aren't guaranteed to restart at 1 within every trimester (e.g. trimester 2's
+// groups can be numbered 7, 8, ...), so callers must not assume group 1 exists — they should
+// ask this instead of hardcoding 1.
+function firstAvailableGroup(subject, contentType, trimester) {
+  const nums = Object.keys(getGroupNames(subject, contentType, trimester)).map(Number).sort((a,b) => a-b);
+  return nums.length ? nums[0] : 1;
+}
 function wordsForGroup(subject, contentType, trimester, group) {
   const node = ((ALL_WORDS_DB[subject]||{})[contentType]||{})[trimester] || {};
   if (group === 'all') return Object.values(node).flat();
@@ -1892,7 +1900,7 @@ async function initApp() {
   currentSubject = 'history';
   currentContentType = availableContentTypes('history')[0] || 'term';
   currentTrimester = availableTrimesters('history', currentContentType)[0] || 1;
-  currentGroup = 1;
+  currentGroup = firstAvailableGroup(currentSubject, currentContentType, currentTrimester);
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   document.getElementById('user-email-display').textContent = currentUser?.email || '';
   renderContentTypeTabs();
@@ -1911,7 +1919,7 @@ async function switchSubject(subj) {
   document.getElementById('subj-geo').classList.toggle('active', subj === 'geography');
   currentContentType = availableContentTypes(subj)[0] || 'term';
   currentTrimester = availableTrimesters(subj, currentContentType)[0] || 1;
-  currentGroup = 1;
+  currentGroup = firstAvailableGroup(currentSubject, currentContentType, currentTrimester);
   if (subj === 'history') {
     document.getElementById('menu-title').textContent = 'بطاقات المراجعة التاريخية';
     document.getElementById('menu-subtitle').textContent = 'الجزائر — الحركة الوطنية';
@@ -1995,7 +2003,7 @@ function renderDynGroupBtns() {
 async function switchContentType(ct) {
   currentContentType = ct;
   currentTrimester = availableTrimesters(currentSubject, ct)[0] || 1;
-  currentGroup = 1;
+  currentGroup = firstAvailableGroup(currentSubject, currentContentType, currentTrimester);
   renderContentTypeTabs();
   renderTrimesterTabs();
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
@@ -2005,7 +2013,7 @@ async function switchContentType(ct) {
 
 async function switchTrimester(t) {
   currentTrimester = t;
-  currentGroup = 1;
+  currentGroup = firstAvailableGroup(currentSubject, currentContentType, currentTrimester);
   renderTrimesterTabs();
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   renderDynGroupBtns();
@@ -2827,7 +2835,7 @@ async function refreshPlanStatus() {
     learnBtn.style.display = 'none';
     infoLine.textContent = `🎉 أنهيت كل المصطلحات الجديدة في هذه الخطة (${learnedCount}/${totalCount}) — بقيت المراجعات فقط`;
     if (plan.status === 'active') {
-      const { error: completeErr } = await dbWrite(db.from('study_plans').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', plan.id), { context: 'auto-complete plan', silent: true });
+      const { error: completeErr } = await dbWrite(db.from('study_plans').update({ status: 'completed', memorisation_completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', plan.id), { context: 'auto-complete plan', silent: true });
       // This block only ever runs once per plan -- plan.status flips to 'completed' in the
       // DB the moment this succeeds, so refreshPlanStatus's own fetch above will never see
       // status:'active' for this plan again. That's exactly the "exact moment of transition"
@@ -2890,17 +2898,64 @@ async function showCompletionPopup(plan) {
     </div>
 
     <div style="font-size:0.85rem;font-weight:700;margin-bottom:6px;">المرحلة القادمة: المراجعة 📖</div>
-    <div style="font-size:0.78rem;color:var(--text-sub);line-height:1.8;">
+    <div style="font-size:0.78rem;color:var(--text-sub);line-height:1.8;margin-bottom:16px;">
       لا حاجة لحفظ مصطلحات جديدة الآن. ستستمر مراجعة ما حفظته حسب مستوى إتقانك لكل مصطلح —
       المصطلحات القوية لن تختفي من المراجعة، لكنها ستُراجَع بوتيرة أقل. كلما اقترب موعد
       الامتحان، يأخذ الجدول ذلك بعين الاعتبار لضمان مراجعة أخيرة لكل مصطلح قبل الامتحان.
       ${examLine}
+    </div>
+
+    <div id="capacity-section">
+      <div style="font-size:0.85rem;font-weight:700;margin-bottom:6px;">كم اختباراً كتابياً تستطيع إنجازه واقعياً في جلسة مراجعة واحدة (يوم واحد)؟</div>
+      <div style="font-size:0.75rem;color:var(--text-sub);margin-bottom:10px;">هذا الرقم يساعد النظام على توزيع المراجعات بشكل واقعي قبل الامتحان. الأسئلة متعددة الخيارات أخف بكثير ولا تُحسب من هذا العدد.</div>
+      <input type="number" id="capacity-input" min="1" max="50" placeholder="مثال: 5"
+        style="width:100%;padding:11px 14px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:12px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.95rem;outline:none;margin-bottom:10px;">
+      <div id="capacity-error" class="auth-error" style="display:none;"></div>
+      <div id="capacity-warning" style="display:none;font-size:0.78rem;color:var(--text-sub);background:var(--input-bg);border-radius:10px;padding:10px;margin-bottom:10px;line-height:1.7;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="submitWritingCapacity()" id="capacity-submit-btn">تأكيد ✓</button>
     </div>
   `;
   document.getElementById('completion-popup-overlay').classList.add('active');
 }
 function closeCompletionPopup() {
   document.getElementById('completion-popup-overlay').classList.remove('active');
+}
+
+// Part C: capacity is validated and the whole workload distribution is computed
+// server-side (set_writing_test_capacity -> rebalance_revision_workload). The
+// warning shown here is driven by the ACTUAL rebalance outcome (force_placed_on_last_day),
+// not a client-side pre-estimate -- more accurate, and impossible to spoof since
+// it reflects what the server genuinely had to do.
+async function submitWritingCapacity() {
+  const val = parseInt(document.getElementById('capacity-input').value, 10);
+  const errEl = document.getElementById('capacity-error');
+  const warnEl = document.getElementById('capacity-warning');
+  errEl.style.display = 'none'; warnEl.style.display = 'none';
+
+  if (!Number.isInteger(val) || val < 1 || val > 50) {
+    errEl.textContent = 'الرجاء إدخال رقم بين 1 و50';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  const btn = document.getElementById('capacity-submit-btn');
+  btn.disabled = true; btn.textContent = '...جاري الحفظ';
+  const { data: result, error } = await dbWrite(db.rpc('set_writing_test_capacity', { p_capacity: val }),
+    { context: 'submitWritingCapacity', message: 'تعذّر حفظ الإجابة، حاول مرة أخرى.' });
+  btn.disabled = false; btn.textContent = 'تأكيد ✓';
+  if (error || !result?.success) return;
+
+  if (result.force_placed_on_last_day > 0) {
+    warnEl.innerHTML = `📌 لديك كمية مراجعة كبيرة نسبياً للوقت المتبقي قبل الامتحان.
+      سيعطي النظام الأولوية للمصطلحات الأهم، وقد يتم نقل بعض المصطلحات القوية إلى المراجعة
+      الخفيفة (البطاقات التعليمية) بدلاً من الاختبار الكتابي عند الحاجة. هذا طبيعي ولا داعي للقلق.`;
+    warnEl.style.display = 'block';
+    // Leave the form visible with the warning so the student can adjust their
+    // number and resubmit if they realize their capacity was too low, or just close.
+    document.getElementById('capacity-submit-btn').textContent = 'تحديث ✓';
+  } else {
+    document.getElementById('capacity-section').innerHTML = `<div style="text-align:center;font-size:0.85rem;color:var(--correct-text);">✅ تم ضبط خطة المراجعة</div>`;
+  }
 }
 
 // §13 (Phase D): fuller plan overview — pulls entirely from real scheduling
