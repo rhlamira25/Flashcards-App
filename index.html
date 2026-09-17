@@ -1236,7 +1236,7 @@ select.form-input{appearance:auto;}
     </div>
   </div>
   <div class="nav"><button class="btn btn-ghost" onclick="fcPrev()">◀</button><span style="font-size:0.8rem;color:var(--text-sub)" id="fc-counter">1 / 10</span><button class="btn btn-ghost" onclick="fcNext()">▶</button></div>
-  <div style="margin-top:14px"><button class="btn btn-secondary" onclick="goMenu()">← القائمة</button></div>
+  <div style="margin-top:14px"><button class="btn btn-secondary" onclick="exitFlashcards()">← القائمة</button></div>
 </div>
 
 <!-- ══ PAGE: QCM ══ -->
@@ -1429,6 +1429,7 @@ select.form-input{appearance:auto;}
   <div style="width:100%;max-width:420px;display:flex;flex-direction:column;gap:10px;margin-top:14px;">
     <button class="btn btn-primary" id="rh-start-btn" onclick="startReviewSession()" style="padding:14px;">ابدأ المراجعة الآن ▶</button>
     <button class="btn btn-ghost" onclick="startComponentQuiz()">🧩 مراجعة سريعة بالمكونات</button>
+    <button class="btn btn-ghost" id="rh-flashcards-btn" onclick="openRevisionFlashcards()" style="display:none;">🗂️ بطاقات تعليمية (اختياري — للمراجعة الخفيفة)</button>
     <button class="btn btn-secondary" onclick="goMenu()">← القائمة</button>
   </div>
 </div>
@@ -2225,6 +2226,100 @@ function fcPrev() { if (fcIdx > 0) { fcIdx--; renderFC(); } }
 async function goMenu() { showPage('menu'); await refreshDash(); }
 
 // ══════════════════════════════════════
+//  PART D — REVISION-PHASE FLASHCARD RECALL
+//
+//  All concepts learned during Memorisation become browsable here, grouped by
+//  CURRENT proficiency (live from concept_progress, same source as everywhere
+//  else in the app -- Part A). This is explicitly optional/light recall, never
+//  a substitute for the required active review session:
+//  - Only surfaced once Revision Phase has begun (openReviewHub wiring above).
+//  - Positioned AFTER the required "ابدأ المراجعة الآن" button in the UI, never before.
+//  - Reuses the existing showFlashcard/renderFC/fcNext/fcPrev/flipCard flow rather
+//    than inventing a parallel viewer -- no new "second flashcard system".
+//  - Critically: NONE of these functions ever call dbWrite/db.rpc/persist_answer_and_progress
+//    or touch concept_progress in any way. Browsing here can never mark a review
+//    completed, change proficiency, change last_tested_at/next_review_at, or create
+//    a review event -- confirmed by inspection, since renderFC only ever READS
+//    fcLiveMastery (already fetched) and progress.scores (localStorage, historical
+//    display only). Only an explicit active test (QCM/rewrite, elsewhere) can do that.
+// ══════════════════════════════════════
+let inRevisionFlashcards = false;
+let savedWordsBeforeRevisionFlashcards = null;
+
+async function openRevisionFlashcards() {
+  if (!currentPlan || !isRevisionPhase(currentPlan)) return;
+
+  const { data: planWords } = await db.from('plan_concepts').select('word_id').eq('plan_id', currentPlan.id);
+  const wordIds = [...new Set((planWords || []).map(r => r.word_id))];
+  if (!wordIds.length) return;
+
+  const liveMastery = await fetchLiveMastery(wordIds);
+  const flat = Object.keys(ALL_WORDS_DB).flatMap(subj => flattenSubjectWords(subj));
+  const byId = new Map(flat.map(w => [w.id, w]));
+
+  const buckets = { critical: [], weak: [], fragile: [], strong: [] };
+  wordIds.forEach(id => {
+    const m = liveMastery.get(id);
+    const w = byId.get(id);
+    if (m && w && buckets[m.level]) buckets[m.level].push(w);
+  });
+
+  const labels = { critical: ['🔴 حرج', buckets.critical.length], weak: ['🟠 ضعيف', buckets.weak.length], fragile: ['🟡 هش', buckets.fragile.length], strong: ['🟢 قوي', buckets.strong.length] };
+  const totalCount = Object.values(buckets).reduce((s, arr) => s + arr.length, 0);
+
+  document.getElementById('revision-fc-picker-body').innerHTML = `
+    <div style="text-align:center;font-weight:800;margin-bottom:4px;">🗂️ بطاقات تعليمية</div>
+    <div style="text-align:center;font-size:0.78rem;color:var(--text-sub);margin-bottom:14px;">مراجعة اختيارية وخفيفة — لا تُغيّر تقدمك أو جدول مراجعتك</div>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${Object.entries(labels).map(([key, [label, count]]) => `
+        <button class="btn btn-ghost" style="justify-content:space-between;display:flex;" ${count===0?'disabled':''} onclick="startRevisionFlashcardGroup('${key}')">
+          <span>${label}</span><span>${count}</span>
+        </button>`).join('')}
+      <button class="btn btn-ghost" style="justify-content:space-between;display:flex;font-weight:700;" ${totalCount===0?'disabled':''} onclick="startRevisionFlashcardGroup('all')">
+        <span>الكل</span><span>${totalCount}</span>
+      </button>
+    </div>
+  `;
+  document.getElementById('revision-fc-picker-overlay').classList.add('active');
+}
+function closeRevisionFlashcardPicker() {
+  document.getElementById('revision-fc-picker-overlay').classList.remove('active');
+}
+
+async function startRevisionFlashcardGroup(level) {
+  if (!currentPlan) return;
+  const { data: planWords } = await db.from('plan_concepts').select('word_id').eq('plan_id', currentPlan.id);
+  const wordIds = [...new Set((planWords || []).map(r => r.word_id))];
+  const liveMastery = await fetchLiveMastery(wordIds);
+  const flat = Object.keys(ALL_WORDS_DB).flatMap(subj => flattenSubjectWords(subj));
+  const byId = new Map(flat.map(w => [w.id, w]));
+
+  const selected = wordIds
+    .filter(id => level === 'all' || liveMastery.get(id)?.level === level)
+    .map(id => byId.get(id))
+    .filter(Boolean);
+  if (!selected.length) return;
+
+  closeRevisionFlashcardPicker();
+  savedWordsBeforeRevisionFlashcards = WORDS; // restored on exit, never left dangling for goMenu/refreshDash
+  WORDS = selected;
+  inRevisionFlashcards = true;
+  await showFlashcard();
+  document.getElementById('fc-badge').textContent = 'بطاقات المراجعة (اختياري)';
+}
+
+async function exitFlashcards() {
+  if (inRevisionFlashcards) {
+    WORDS = savedWordsBeforeRevisionFlashcards || WORDS;
+    savedWordsBeforeRevisionFlashcards = null;
+    inRevisionFlashcards = false;
+    await openReviewHub();
+  } else {
+    await goMenu();
+  }
+}
+
+// ══════════════════════════════════════
 //  HELPERS
 // ══════════════════════════════════════
 function shuffle(arr) { const a=[...arr]; for (let i=a.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]; } return a; }
@@ -2508,6 +2603,10 @@ async function openReviewHub() {
 
   // item 2: casual rewrite-test activity on plan-scope words the plan hasn't tested itself
   if (currentPlan && currentPlan.status === 'active') await checkOutsideActivity(currentPlan);
+
+  // Part D: optional flashcard recall is only surfaced once Revision Phase has
+  // begun -- during Memorisation there's nothing "already learned" to browse yet.
+  document.getElementById('rh-flashcards-btn').style.display = isRevisionPhase(currentPlan) ? '' : 'none';
 
   const today = todayStr();
   const { data: rows } = await db.from('concept_progress').select('*').eq('user_id', currentUser.id);
@@ -5015,6 +5114,14 @@ function checkUrlAuthError() {
   <div class="plan-change-box">
     <div id="completion-popup-body" style="max-height:65vh;overflow-y:auto;"></div>
     <button class="btn btn-primary" style="width:100%;margin-top:12px;" onclick="closeCompletionPopup()">فهمت ✓</button>
+  </div>
+</div>
+
+<!-- Part D: revision flashcards -- proficiency group picker -->
+<div class="kb-explainer-overlay" id="revision-fc-picker-overlay">
+  <div class="plan-change-box">
+    <div id="revision-fc-picker-body" style="max-height:65vh;overflow-y:auto;"></div>
+    <button class="btn btn-secondary" style="width:100%;margin-top:12px;" onclick="closeRevisionFlashcardPicker()">إلغاء</button>
   </div>
 </div>
 
