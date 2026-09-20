@@ -1430,6 +1430,7 @@ select.form-input{appearance:auto;}
     <button class="btn btn-primary" id="rh-start-btn" onclick="startReviewSession()" style="padding:14px;">ابدأ المراجعة الآن ▶</button>
     <button class="btn btn-ghost" onclick="startComponentQuiz()">🧩 مراجعة سريعة بالمكونات</button>
     <button class="btn btn-ghost" id="rh-flashcards-btn" onclick="openRevisionFlashcards()" style="display:none;">🗂️ بطاقات تعليمية (اختياري — للمراجعة الخفيفة)</button>
+    <button class="btn btn-ghost" id="rh-final-report-btn" onclick="openFinalReport()" style="display:none;">📊 التقرير النهائي قبل الامتحان</button>
     <button class="btn btn-secondary" onclick="goMenu()">← القائمة</button>
   </div>
 </div>
@@ -2320,6 +2321,46 @@ async function exitFlashcards() {
 }
 
 // ══════════════════════════════════════
+//  PART G — FINAL PRE-EXAM REPORT (read-only; server does the sorting/grouping,
+//  this just renders whatever get_revision_final_report() returns)
+// ══════════════════════════════════════
+const REPORT_TIER_LABELS = {
+  untested: '⚪ لم يُختبر بعد',
+  critical: '🔴 حرج',
+  weak: '🟠 ضعيف',
+  fragile: '🟡 هش',
+  strong: '🟢 متمكن'
+};
+async function openFinalReport() {
+  const { data, error } = await db.rpc('get_revision_final_report');
+  const body = document.getElementById('final-report-body');
+  if (error) {
+    body.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text-sub);">تعذّر تحميل التقرير حالياً.</div>`;
+    document.getElementById('final-report-overlay').classList.add('active');
+    return;
+  }
+  const groups = {};
+  (data || []).forEach(row => {
+    const tier = row.proficiency_level || 'untested';
+    (groups[tier] = groups[tier] || []).push(row);
+  });
+  const order = ['untested', 'critical', 'weak', 'fragile', 'strong'];
+  body.innerHTML = order.filter(t => groups[t] && groups[t].length).map(tier => `
+    <div style="margin-bottom:14px;">
+      <div style="font-weight:700;font-size:0.85rem;color:var(--text);margin-bottom:6px;">${REPORT_TIER_LABELS[tier]} (${groups[tier].length})</div>
+      ${groups[tier].map(r => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 4px;font-size:0.8rem;border-bottom:1px solid var(--border);">
+          <span>${escapeHtml(r.term)}</span>
+          ${r.after_exam ? '<span style="color:var(--text-sub);font-size:0.7rem;">بعد الامتحان</span>' : ''}
+        </div>`).join('')}
+    </div>`).join('') || `<div style="padding:20px;text-align:center;color:var(--text-sub);">لا توجد مفاهيم ضمن نطاق المراجعة.</div>`;
+  document.getElementById('final-report-overlay').classList.add('active');
+}
+function closeFinalReport() {
+  document.getElementById('final-report-overlay').classList.remove('active');
+}
+
+// ══════════════════════════════════════
 //  HELPERS
 // ══════════════════════════════════════
 function shuffle(arr) { const a=[...arr]; for (let i=a.length-1;i>0;i--) { const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]; } return a; }
@@ -2610,6 +2651,7 @@ async function openReviewHub() {
   // Part D: optional flashcard recall is only surfaced once Revision Phase has
   // begun -- during Memorisation there's nothing "already learned" to browse yet.
   document.getElementById('rh-flashcards-btn').style.display = isRevisionPhase(currentPlan) ? '' : 'none';
+  document.getElementById('rh-final-report-btn').style.display = isRevisionPhase(currentPlan) ? '' : 'none';
 
   const today = todayStr();
   const { data: rows } = await db.from('concept_progress').select('*').eq('user_id', currentUser.id);
@@ -5073,6 +5115,16 @@ function checkUrlAuthError() {
       <button class="btn btn-primary" style="flex:1;" onclick="acceptOutsideActivity()">اعتماد المحدد</button>
       <button class="btn btn-ghost" style="flex:1;" onclick="declineOutsideActivity()">تجاهل الآن</button>
     </div>
+  </div>
+</div>
+
+<!-- PART G: FINAL PRE-EXAM REPORT — read-only, pulled fresh from get_revision_final_report() every open -->
+<div class="kb-explainer-overlay" id="final-report-overlay">
+  <div class="plan-change-box" style="max-height:80vh;display:flex;flex-direction:column;">
+    <div style="font-weight:800;font-size:1.05rem;color:var(--text);margin-bottom:10px;">📊 التقرير النهائي قبل الامتحان</div>
+    <div style="font-size:0.78rem;color:var(--text-sub);margin-bottom:10px;">هذا التقرير للاطّلاع فقط — لا يغيّر جدول المراجعة أو مستوى الإتقان.</div>
+    <div id="final-report-body" style="overflow-y:auto;flex:1;"></div>
+    <button class="btn btn-primary" style="width:100%;margin-top:14px;" onclick="closeFinalReport()">إغلاق</button>
   </div>
 </div>
 
