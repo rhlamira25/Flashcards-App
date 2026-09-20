@@ -2522,12 +2522,15 @@ async function triggerAiJudgment(variantRow, wordId, applyCtx) {
     if (score === null) return; // 'reject'/'uncertain' with no numeric score — keep the original raw fuzzy score as-is
 
     if (applyCtx.answerRowId) {
-      await dbWrite(db.from('rewrite_test_answers').update({ score }).eq('id', applyCtx.answerRowId), { context: 'triggerAiJudgment apply score', silent: true });
-    }
-    const { data: existingProg } = await db.from('concept_progress').select('*').eq('user_id', currentUser.id).eq('word_id', wordId);
-    if (existingProg && existingProg.length) {
-      const level = classifyProficiency(score);
-      await dbWrite(db.from('concept_progress').update({ current_proficiency: score, proficiency_level: level.key }).eq('id', existingProg[0].id), { context: 'triggerAiJudgment update concept_progress', silent: true });
+      // Server recomputes real_level/interval/next_review_at from the corrected score
+      // (mirrors persist_answer_and_progress exactly) and recalculates Revision
+      // workload -- see correct_answer_score_and_progress. This replaces the previous
+      // raw concept_progress UPDATE, which wrote client-computed proficiency directly
+      // (a Part A §2.2 violation) and never touched next_review_at/current_interval,
+      // leaving scheduling stale after an AI-corrected variant judgment.
+      await dbWrite(db.rpc('correct_answer_score_and_progress', {
+        p_answer_id: applyCtx.answerRowId, p_new_score: score
+      }), { context: 'triggerAiJudgment correct score+progress', silent: true });
     }
   } catch (e) { console.error('triggerAiJudgment failed:', e); }
 }
@@ -2857,35 +2860,23 @@ function closePlanChangePopup() {
 const REVIEW_SOFT_TARGET = 8, REVIEW_HARD_CEIL = 12;
 
 async function reconcileMissedReviews() {
+  // Server-authoritative now (reconcile_missed_reviews RPC): the priority ranking and
+  // the next_review_at writes both happen there under explicit ownership checks, not
+  // in the browser. This avoided being a second, client-authoritative scheduler
+  // operating on the same field persist_answer_and_progress/rebalance_revision_workload
+  // are the sole authority over. Same soft_target(8)/hard_ceil(12) thresholds and
+  // "least-urgent-first, chunked across future days" behavior as before.
+  const { data: result, error } = await db.rpc('reconcile_missed_reviews');
+  if (error) { console.error('reconcileMissedReviews failed:', error); return null; }
+  if (!result || !result.reconciled) return null;
+
   const today = todayStr();
-  const { data: dueRows } = await db.from('concept_progress').select('*, words(term)').eq('user_id', currentUser.id).eq('is_paused', false).lte('next_review_at', today);
-  if (!dueRows || dueRows.length <= REVIEW_HARD_CEIL) return null; // normal-sized backlog — behave exactly as before
-
-  const examDaysRemaining = (currentPlan && currentPlan.target_date) ? Math.round((new Date(currentPlan.target_date) - new Date(today)) / 86400000) : null;
-  const scored = dueRows.map(r => ({ ...r, _score: computePriorityScore(r, today, examDaysRemaining) }));
-  scored.sort((a, b) => b._score - a._score); // most urgent (critical/most overdue) first
-
-  const keepToday = scored.slice(0, REVIEW_SOFT_TARGET);
-  const overflow = scored.slice(REVIEW_SOFT_TARGET);
-  if (!overflow.length) return null;
-
-  const oldSchedule = { [today]: dueRows.length };
-  const newSchedule = { [today]: keepToday.length };
-  const moved = [];
-
-  for (let i = 0; i < overflow.length; i++) {
-    const dayOffset = Math.floor(i / REVIEW_SOFT_TARGET) + 1; // next REVIEW_SOFT_TARGET-sized chunk lands tomorrow, then the day after, etc.
-    const newDate = addDaysStr(today, dayOffset);
-    const row = overflow[i];
-    await dbWrite(db.from('concept_progress').update({ next_review_at: newDate }).eq('id', row.id),
-      { context: 'reconcileMissedReviews placement', silent: true });
-    newSchedule[newDate] = (newSchedule[newDate] || 0) + 1;
-    moved.push({ term: row.words?.term || '', newDate });
-  }
+  const oldSchedule = { [today]: result.due_count };
+  const newSchedule = { [today]: result.due_count - result.moved_count };
+  (result.moved || []).forEach(m => { newSchedule[m.new_date] = (newSchedule[m.new_date] || 0) + 1; });
 
   return {
-    movedCount: moved.length,
-    moved,
+    movedCount: result.moved_count,
     oldSchedule,
     newSchedule,
     targetDate: (currentPlan && currentPlan.target_date) || null,
