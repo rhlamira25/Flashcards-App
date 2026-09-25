@@ -2641,9 +2641,15 @@ async function openReviewHub() {
   }
 
   // §6 adaptive scheduler: same anti-accumulation principle for reviews —
-  // only intervenes when today's due backlog is actually excessive.
-  const reviewSummary = await reconcileMissedReviews();
-  if (reviewSummary) showPlanChangePopup(reviewSummary);
+  // only intervenes when today's due backlog is actually excessive. Memorisation-phase
+  // only, matching reconcileMissedPlanSessions above: during Revision, rebalance_revision_workload()
+  // is the sole authority over next_review_at (capacity/exam-boundary/priority-aware) —
+  // this simpler backlog-smoothing formula knows nothing about any of that and must not
+  // compete with it over the same field.
+  if (currentPlan && currentPlan.status === 'active') {
+    const reviewSummary = await reconcileMissedReviews();
+    if (reviewSummary) showPlanChangePopup(reviewSummary);
+  }
 
   // item 2: casual rewrite-test activity on plan-scope words the plan hasn't tested itself
   if (currentPlan && currentPlan.status === 'active') await checkOutsideActivity(currentPlan);
@@ -2825,9 +2831,13 @@ async function reconcileMissedPlanSessions(plan) {
 
   if (!placements.length) return null;
 
-  for (const p of placements) {
-    await dbWrite(db.from('plan_concepts').update({ scheduled_date: p.date, session_number: p.sessionNumber }).eq('id', p.item.id),
-      { context: 'reconcileMissedPlanSessions placement', silent: true }); // one toast per whole reconciliation would be noisy across a loop; logged for diagnosis
+  if (placements.length) {
+    // Item 4: single batched bulk-update instead of one .update() network round-trip
+    // per affected row. Does not change what dates/session numbers were calculated
+    // above -- only how the already-decided values get persisted.
+    const updates = placements.map(p => ({ id: p.item.id, scheduled_date: p.date, session_number: p.sessionNumber }));
+    const { error: bulkErr } = await db.rpc('bulk_update_plan_concept_schedule', { p_updates: updates });
+    if (bulkErr) console.error('reconcileMissedPlanSessions bulk placement failed:', bulkErr);
   }
 
   const moved = placements.map(p => ({ term: p.item.words?.term || '', newDate: p.date }));
