@@ -1005,6 +1005,13 @@ body {
       <input type="text" id="word-group-name" placeholder="مثال: المقاومة والتحرر" style="width:100%;padding:9px 12px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:10px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
     </div>
     <div style="margin-bottom:12px;">
+      <label style="font-size:0.78rem;color:var(--text-muted);display:block;margin-bottom:5px;">مستوى الوصول (Tier)</label>
+      <select id="word-tier" style="width:100%;padding:9px 12px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:10px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+        <option value="full">مدفوع (Full)</option>
+        <option value="free">مجاني (Free)</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px;">
       <label style="font-size:0.78rem;color:var(--text-muted);display:block;margin-bottom:5px;">المصطلح</label>
       <input type="text" id="word-term" placeholder="المصطلح بالعربية" style="width:100%;padding:9px 12px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:10px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
     </div>
@@ -1702,6 +1709,7 @@ function openAddWordModal() {
   document.getElementById('word-group-number').value = '';
   document.getElementById('word-lesson').value = '';
   document.getElementById('word-group-name').value = '';
+  document.getElementById('word-tier').value = 'full';
   document.getElementById('word-term').value = '';
   document.getElementById('word-definition').value = '';
   document.getElementById('save-word-btn').textContent = 'إضافة ✓';
@@ -1721,6 +1729,7 @@ function openEditWordModal(id) {
   document.getElementById('word-group-number').value = word.group_number;
   document.getElementById('word-lesson').value = word.lesson || '';
   document.getElementById('word-group-name').value = word.group_name || '';
+  document.getElementById('word-tier').value = word.tier || 'full';
   document.getElementById('word-term').value = word.term;
   document.getElementById('word-definition').value = word.definition;
   document.getElementById('save-word-btn').textContent = 'حفظ التعديل ✓';
@@ -1749,6 +1758,7 @@ async function saveWord() {
     lesson: document.getElementById('word-lesson').value.trim() || null,
     group_number: groupNumber,
     group_name: document.getElementById('word-group-name').value.trim() || null,
+    tier: document.getElementById('word-tier').value,
     term,
     definition
   };

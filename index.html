@@ -1759,17 +1759,13 @@ async function checkUserAccess(user) {
     return;
   }
 
-  if (profile && profile.is_approved) {
-    const now = new Date();
-    const expiry = profile.expiry_date ? new Date(profile.expiry_date) : null;
-    if (expiry && expiry < now) {
-      showPage('expired');
-      return;
-    }
-    await initApp();
-  } else {
-    showPage('pending');
-  }
+  // Phase 7: entry is no longer gated by is_approved/expiry_date. Any authenticated
+  // user with a completed profile enters the app immediately -- FREE vs FULL content
+  // access is enforced server-side (words RLS + the entitlement checks added to
+  // create_study_plan/save_plan_edits/persist_answer_and_progress/create_rewrite_test),
+  // not by blocking entry here. is_approved/expiry_date remain meaningful (they still
+  // determine FULL access everywhere else), just not as an application-entry gate.
+  await initApp();
 }
 
 
