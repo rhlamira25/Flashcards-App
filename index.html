@@ -1062,19 +1062,19 @@ select.form-input{appearance:auto;}
 </div>
 
 <!-- ══ PAGE: PENDING ══ -->
-<div id="pg-pending" class="page">
+<div id="pg-free-welcome" class="page">
   <div class="pending-box">
-    <div class="pending-icon">⏳</div>
-    <div class="pending-title">حسابك قيد المراجعة ⏳</div>
+    <div class="pending-icon">🎉</div>
+    <div class="pending-title">مرحباً بك في الخطة المجانية 🎉</div>
     <div class="pending-desc">
-      تم تسجيل حسابك بنجاح، لكن لم يتم تفعيله بعد.<br><br>
-      📧 تفقد بريدك الإلكتروني، بما في ذلك مجلد الرسائل غير المرغوب فيها، لمعرفة الخطوات التالية.<br><br>
-      بعد إتمام الاشتراك وتفعيل حسابك، ستصلك رسالة تأكيد تخبرك بأن حسابك أصبح جاهزًا للاستعمال.<br>
-      بعدها سجّل الدخول مجددًا للوصول إلى المنصة.
+      تم إنشاء حسابك بنجاح، وأنت الآن على الخطة المجانية.<br><br>
+      يمكنك البدء في استخدام المنصة مباشرة، لكن الوصول المجاني يشمل:<br>
+      <span style="font-weight:800;color:var(--gold,#b8860b);">40 مفهوماً فقط من أصل أكثر من 200 مفهوم</span><br>
+      متوفرين في المنصة.<br><br>
+      🔒 للوصول إلى جميع المفاهيم والمحتوى، يمكنك اختيار إحدى خطط الاشتراك المتاحة.
     </div>
-    <div id="pending-error" class="auth-error"></div>
-    <div id="pending-success" class="auth-success"></div>
-    <button class="btn btn-secondary" onclick="handleLogout()" style="width:100%">تسجيل الخروج</button>
+    <button class="btn btn-primary" onclick="initApp()" style="width:100%;margin-top:14px;">متابعة إلى المنصة ←</button>
+    <button class="btn btn-secondary" onclick="openUpgradeModal('welcome')" style="width:100%;margin-top:10px;">✨ الحصول على الوصول الكامل</button>
   </div>
 </div>
 
@@ -1117,7 +1117,6 @@ select.form-input{appearance:auto;}
       </div>
     </div>
     <button class="btn btn-primary" onclick="saveProfile()" id="profile-btn" style="margin-top:8px;">حفظ وإكمال ←</button>
-    <button class="btn btn-secondary" onclick="skipProfile()" style="width:100%;margin-top:10px;padding:10px;">تخطي الآن</button>
   </div>
 </div>
 
@@ -1134,6 +1133,7 @@ select.form-input{appearance:auto;}
       <div class="pill" id="menu-overall-pill">0%</div>
     </div>
   </div>
+  <button class="btn btn-primary" id="upgrade-cta-btn" onclick="openUpgradeModal('cta')" style="display:none;width:100%;margin-bottom:12px;font-weight:800;">✨ احصل على الوصول الكامل</button>
   <div class="subject-switcher">
     <button class="subject-btn active" id="subj-hist" onclick="switchSubject('history')">📜 التاريخ</button>
     <button class="subject-btn" id="subj-geo" onclick="switchSubject('geography')">🌍 الجغرافيا</button>
@@ -1175,10 +1175,10 @@ select.form-input{appearance:auto;}
     <div class="mode-title">ابدأ الحفظ الآن</div>
     <div class="mode-desc" id="review-hub-desc">التكرار المتباعد — خطة مراجعة ذكية حسب موعد الامتحان</div>
   </div>
-  <div class="mode-grid">
-    <div class="mode-card" onclick="showFlashcard()"><div class="mode-icon">🃏</div><div class="mode-title">بطاقات المراجعة</div><div class="mode-desc">تصفح المصطلحات — اضغط على البطاقة لتقليبها</div></div>
-    <div class="mode-card" onclick="startQCM()"><div class="mode-icon">☑️</div><div class="mode-title">اختبار QCM <span id="qcm-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">4 خيارات لكل مصطلح — اختر الإجابة الصحيحة</div></div>
-    <div class="mode-card" onclick="startRewrite()"><div class="mode-icon">✍️</div><div class="mode-title">اختبار الكتابة <span id="rw-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">اكتب التعريف بنفسك وستحصل على نسبة دقة</div></div>
+  <div class="mode-grid" id="mode-grid">
+    <div class="mode-card" id="mode-card-flashcards" onclick="handleModeClick('showFlashcard')"><div class="mode-icon">🃏</div><div class="mode-title">بطاقات المراجعة</div><div class="mode-desc">تصفح المصطلحات — اضغط على البطاقة لتقليبها</div></div>
+    <div class="mode-card" id="mode-card-qcm" onclick="handleModeClick('startQCM')"><div class="mode-icon">☑️</div><div class="mode-title">اختبار QCM <span id="qcm-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">4 خيارات لكل مصطلح — اختر الإجابة الصحيحة</div></div>
+    <div class="mode-card" id="mode-card-writing" onclick="handleModeClick('startRewrite')"><div class="mode-icon">✍️</div><div class="mode-title">اختبار الكتابة <span id="rw-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">اكتب التعريف بنفسك وستحصل على نسبة دقة</div></div>
   </div>
 </div>
 
@@ -1583,6 +1583,24 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 //  AUTH
 // ══════════════════════════════════════
 let currentUser = null;
+// Same placeholder already defined in the send-registration-email edge function --
+// reused here rather than inventing a separate URL. Update in both places together.
+const INSTAGRAM_SUBSCRIBE_LINK = 'https://instagram.com/YOUR_HANDLE_HERE';
+
+// DISPLAY-ONLY entitlement mirror (mirrors is_full_access_user's exact definition) --
+// used solely to decide which UI to show (the upgrade CTA, lock icons). The actual
+// authorization boundary is entirely server-side (words/content-table RLS + the RPC
+// entitlement checks); this value is never passed to or trusted by any RPC, and a
+// wrong value here can only ever produce a UI mismatch, never a security bypass.
+let CURRENT_ENTITLEMENT_IS_FULL = false;
+function computeIsFullDisplay(profile) {
+  if (!profile || !profile.is_approved || !profile.expiry_date) return false;
+  return new Date(profile.expiry_date) > new Date();
+}
+function updateUpgradeCTA() {
+  const btn = document.getElementById('upgrade-cta-btn');
+  if (btn) btn.style.display = CURRENT_ENTITLEMENT_IS_FULL ? 'none' : '';
+}
 
 function showPage(id) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1765,6 +1783,7 @@ async function checkUserAccess(user) {
   // create_study_plan/save_plan_edits/persist_answer_and_progress/create_rewrite_test),
   // not by blocking entry here. is_approved/expiry_date remain meaningful (they still
   // determine FULL access everywhere else), just not as an application-entry gate.
+  CURRENT_ENTITLEMENT_IS_FULL = computeIsFullDisplay(profile);
   await initApp();
 }
 
@@ -1797,6 +1816,11 @@ syncThemeIcons();
 // { history: { term: { 1: {1:[...],2:[...]}, 2: {...} }, date: {...}, personality: {...} }, geography: {...} }
 let ALL_WORDS_DB = {};
 let WORDS_LOADED = false;
+// Safe, content-free structural catalog (from the word_group_catalog view) -- covers
+// EVERY group regardless of tier, so FREE users can see the full curriculum structure
+// (including locked groups) without ever loading locked concept content. Never put
+// term/definition data in here.
+let GROUP_CATALOG = {};
 
 async function loadWordsFromDB() {
   if (WORDS_LOADED) return;
@@ -1825,6 +1849,93 @@ async function loadWordsFromDB() {
     });
   });
   WORDS_LOADED = true;
+
+  const { data: catalogRows, error: catErr } = await db.from('word_group_catalog').select('*');
+  if (catErr || !catalogRows) { console.error('Failed to load group catalog:', catErr); return; }
+  GROUP_CATALOG = {};
+  catalogRows.forEach(r => {
+    const subj = r.subject, ct = r.content_type || 'term', tri = r.trimester || 1, grp = r.group_number;
+    if (!GROUP_CATALOG[subj]) GROUP_CATALOG[subj] = {};
+    if (!GROUP_CATALOG[subj][ct]) GROUP_CATALOG[subj][ct] = {};
+    if (!GROUP_CATALOG[subj][ct][tri]) GROUP_CATALOG[subj][ct][tri] = {};
+    GROUP_CATALOG[subj][ct][tri][grp] = { name: r.group_name, allFree: !!r.all_free, count: r.concept_count };
+  });
+}
+
+// Full group list for a subject/content-type/trimester, INCLUDING locked groups --
+// unlike getGroupNames (which only sees whatever made it past tier RLS into ALL_WORDS_DB).
+function getFullGroupCatalog(subject, contentType, trimester) {
+  return ((GROUP_CATALOG[subject] || {})[contentType] || {})[trimester] || {};
+}
+function isGroupLocked(subject, contentType, trimester, groupNum) {
+  const entry = getFullGroupCatalog(subject, contentType, trimester)[groupNum];
+  return entry ? !entry.allFree : false; // unknown group (shouldn't happen) defaults to unlocked rather than hiding it
+}
+function isCurrentGroupLocked() {
+  if (currentGroup === 'all') return false; // "all" naturally only ever contains accessible content
+  return isGroupLocked(currentSubject, currentContentType, currentTrimester, currentGroup);
+}
+
+// Intercepts the three study-mode cards: if the current group is locked, never calls
+// into showFlashcard/startQCM/startRewrite (no content load, no navigation) -- opens
+// the upgrade modal instead. fnName is looked up by name so this stays a single
+// small wrapper instead of three near-identical ones.
+function handleModeClick(fnName) {
+  if (isCurrentGroupLocked()) { openUpgradeModal('mode'); return; }
+  window[fnName]();
+}
+
+// Visually reflects the current group's lock state on the three mode cards. Called
+// whenever the selected group/content-type/trimester changes (switchGroup/switchContentType/
+// switchTrimester) -- purely presentational, never the actual access boundary.
+function updateModeCardLocks() {
+  const locked = isCurrentGroupLocked();
+  ['mode-card-flashcards','mode-card-qcm','mode-card-writing'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.opacity = locked ? '0.55' : '';
+    el.style.cursor = locked ? 'pointer' : '';
+    const iconEl = el.querySelector('.mode-icon');
+    if (iconEl) {
+      if (locked && !iconEl.dataset.origIcon) iconEl.dataset.origIcon = iconEl.textContent;
+      iconEl.textContent = locked ? '🔒' : (iconEl.dataset.origIcon || iconEl.textContent);
+    }
+  });
+}
+
+// ══════════════════════════════════════
+//  REUSABLE UPGRADE MODAL — same modal for the welcome screen, the main-page CTA,
+//  and every locked-group/mode interaction. Shows only the EXISTING subscription
+//  prices/contact already used in the registration email -- never invents new ones.
+// ══════════════════════════════════════
+function openUpgradeModal(context) {
+  const body = document.getElementById('upgrade-modal-body');
+  const isLockedContext = context === 'group' || context === 'mode';
+  body.innerHTML = isLockedContext ? `
+    <div style="font-size:1.4rem;margin-bottom:6px;">🔒</div>
+    <div style="font-weight:800;font-size:1rem;color:var(--text);margin-bottom:8px;">هذا المحتوى متاح ضمن الخطة الكاملة</div>
+    <div style="font-size:0.82rem;color:var(--text-sub);margin-bottom:16px;line-height:1.7;">هذا القسم حصري للمشتركين في الخطة الكاملة.<br>اشترك للوصول إلى جميع المفاهيم والمحتويات المتاحة.</div>
+  ` : `
+    <div style="font-size:1.4rem;margin-bottom:6px;">✨</div>
+    <div style="font-weight:800;font-size:1rem;color:var(--text);margin-bottom:8px;">احصل على الوصول الكامل</div>
+    <div style="font-size:0.82rem;color:var(--text-sub);margin-bottom:16px;line-height:1.7;">افتح جميع المفاهيم والمحتويات المتاحة على المنصة — أكثر من 200 مفهوم في التاريخ والجغرافيا.</div>
+  `;
+  body.innerHTML += `
+    <div style="background:var(--input-bg,#faf6ee);border:1px solid var(--input-border,#e0d5c5);border-radius:12px;padding:14px;margin-bottom:14px;text-align:right;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--input-border,#e0d5c5);">
+        <span style="font-weight:700;color:var(--text);">اشتراك فصلي (3 أشهر)</span><span style="color:var(--gold,#b8860b);font-weight:800;">1200 دج</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;">
+        <span style="font-weight:700;color:var(--text);">اشتراك سنوي</span><span style="color:var(--gold,#b8860b);font-weight:800;">3000 دج</span>
+      </div>
+    </div>
+    <a href="${INSTAGRAM_SUBSCRIBE_LINK}" target="_blank" rel="noopener" class="btn btn-primary" style="width:100%;display:block;text-align:center;text-decoration:none;margin-bottom:8px;">اشترك الآن / تواصل معنا 📩</a>
+    <button class="btn btn-secondary" style="width:100%;" onclick="closeUpgradeModal()">إغلاق</button>
+  `;
+  document.getElementById('upgrade-modal-overlay').classList.add('active');
+}
+function closeUpgradeModal() {
+  document.getElementById('upgrade-modal-overlay').classList.remove('active');
 }
 
 const CONTENT_TYPE_LABELS = { term: '📖 كلمات', date: '🗓️ تواريخ', personality: '👤 شخصيات', map: '🗺️ خرائط' };
@@ -1904,6 +2015,8 @@ async function initApp() {
   renderContentTypeTabs();
   renderTrimesterTabs();
   renderDynGroupBtns();
+  updateModeCardLocks();
+  updateUpgradeCTA();
   await loadAndRefresh();
   showPage('menu');
 }
@@ -1930,6 +2043,7 @@ async function switchSubject(subj) {
   renderTrimesterTabs();
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   renderDynGroupBtns();
+  updateModeCardLocks();
   await loadAndRefresh();
 }
 
@@ -1976,12 +2090,17 @@ function toggleGroupAccordion(forceOpen) {
 function renderDynGroupBtns() {
   const container = document.getElementById('dyn-group-btns');
   if (!container) return;
-  const names = getGroupNames(currentSubject, currentContentType, currentTrimester);
-  const groups = Object.keys(names).sort((a,b) => parseInt(a)-parseInt(b));
+  const names = getGroupNames(currentSubject, currentContentType, currentTrimester); // free/accessible groups only
+  const fullCatalog = getFullGroupCatalog(currentSubject, currentContentType, currentTrimester); // every group, for display
+  const groups = Object.keys(fullCatalog).sort((a,b) => parseInt(a)-parseInt(b));
   const rowStyle = 'width:100%;display:block;text-align:right;padding:12px 14px;border:none;border-bottom:1px solid var(--input-border,#e0d5c5);background:transparent;font-family:Cairo,sans-serif;font-size:0.85rem;cursor:pointer;';
   let html = groups.map(g => {
     const selected = parseInt(g) === currentGroup;
-    return `<button type="button" class="dyn-group-row" style="${rowStyle}${selected?'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);':'color:var(--text);'}" onclick="switchGroup(${g})">${escapeHtml(names[g])}${selected?' ✓':''}</button>`;
+    const locked = !fullCatalog[g].allFree;
+    const label = (locked ? '🔒 ' : '') + escapeHtml(fullCatalog[g].name || names[g] || `المجموعة ${g}`);
+    const click = locked ? `openUpgradeModal('group')` : `switchGroup(${g})`;
+    const lockedStyle = locked ? 'color:var(--text-sub,#999);' : (selected ? 'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);' : 'color:var(--text);');
+    return `<button type="button" class="dyn-group-row" style="${rowStyle}${lockedStyle}" onclick="${click}">${label}${selected && !locked?' ✓':''}</button>`;
   }).join('');
   const allSelected = currentGroup === 'all';
   html += `<button type="button" class="dyn-group-row" style="${rowStyle}border-bottom:none;${allSelected?'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);':'color:var(--text);'}" onclick="switchGroup('all')">الكل${allSelected?' ✓':''}</button>`;
@@ -2006,6 +2125,7 @@ async function switchContentType(ct) {
   renderTrimesterTabs();
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   renderDynGroupBtns();
+  updateModeCardLocks();
   await loadAndRefresh();
 }
 
@@ -2015,6 +2135,7 @@ async function switchTrimester(t) {
   renderTrimesterTabs();
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   renderDynGroupBtns();
+  updateModeCardLocks();
   await loadAndRefresh();
 }
 
@@ -2022,6 +2143,7 @@ async function switchGroup(g) {
   currentGroup = (g === 'all') ? 'all' : parseInt(g);
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   renderDynGroupBtns();
+  updateModeCardLocks();
   toggleGroupAccordion(false);
   await loadAndRefresh();
 }
@@ -5012,11 +5134,11 @@ async function saveProfile() {
 
   btn.disabled = false; btn.textContent = 'حفظ وإكمال ←';
   if (profileSaveErr) return; // stay on the form instead of proceeding as if it saved
-  showPage('pending');
-}
-
-async function skipProfile() {
-  showPage('pending');
+  // A newly-completed profile is always FREE at this point (is_approved defaults false,
+  // enforced by the protect_profile_privileged_fields_insert trigger) -- show the FREE
+  // welcome screen rather than the old pending/waiting-for-activation screen.
+  CURRENT_ENTITLEMENT_IS_FULL = false;
+  showPage('free-welcome');
 }
 
 // ══════════════════════════════════════
@@ -5076,19 +5198,6 @@ function checkUrlAuthError() {
 })();
 </script>
 
-<!-- ══ PAGE: EXPIRED ══ -->
-<div id="pg-expired" class="page">
-  <div class="pending-box">
-    <div class="pending-icon">⏰</div>
-    <div class="pending-title">انتهى اشتراكك</div>
-    <div class="pending-desc">
-      انتهت صلاحية اشتراكك.<br>
-      تواصل مع المشرف لتجديد اشتراكك والمتابعة.
-    </div>
-    <button class="btn btn-secondary" onclick="handleLogout()" style="width:100%">تسجيل الخروج</button>
-  </div>
-</div>
-
 <!-- KEYBOARD EXPLAINER — mobile only, shown once before the first writing test of the session -->
 <div class="kb-explainer-overlay" id="kb-explainer-overlay">
   <div class="kb-explainer-box">
@@ -5121,6 +5230,14 @@ function checkUrlAuthError() {
       <button class="btn btn-primary" style="flex:1;" onclick="acceptOutsideActivity()">اعتماد المحدد</button>
       <button class="btn btn-ghost" style="flex:1;" onclick="declineOutsideActivity()">تجاهل الآن</button>
     </div>
+  </div>
+</div>
+
+<!-- REUSABLE UPGRADE MODAL — shared by the FREE welcome screen, the main-page CTA, and
+     every locked group/mode interaction -->
+<div class="kb-explainer-overlay" id="upgrade-modal-overlay">
+  <div class="plan-change-box" style="max-height:85vh;overflow-y:auto;text-align:center;">
+    <div id="upgrade-modal-body"></div>
   </div>
 </div>
 
