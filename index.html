@@ -1871,8 +1871,17 @@ function isGroupLocked(subject, contentType, trimester, groupNum) {
   const entry = getFullGroupCatalog(subject, contentType, trimester)[groupNum];
   return entry ? !entry.allFree : false; // unknown group (shouldn't happen) defaults to unlocked rather than hiding it
 }
+// True only when EVERY group in this subject/content-type/trimester is full-tier --
+// i.e. there is nothing free at all to show under "all" (matches trimesters 2/3 today).
+// A trimester with any free group (trimester 1 today) stays accessible under "all" and
+// naturally shows only its free subset, since the underlying words query is RLS-scoped.
+function isAllLocked(subject, contentType, trimester) {
+  const catalog = getFullGroupCatalog(subject, contentType, trimester);
+  const groupNums = Object.keys(catalog);
+  return groupNums.length > 0 && groupNums.every(g => !catalog[g].allFree);
+}
 function isCurrentGroupLocked() {
-  if (currentGroup === 'all') return false; // "all" naturally only ever contains accessible content
+  if (currentGroup === 'all') return isAllLocked(currentSubject, currentContentType, currentTrimester);
   return isGroupLocked(currentSubject, currentContentType, currentTrimester, currentGroup);
 }
 
@@ -2103,7 +2112,11 @@ function renderDynGroupBtns() {
     return `<button type="button" class="dyn-group-row" style="${rowStyle}${lockedStyle}" onclick="${click}">${label}${selected && !locked?' ✓':''}</button>`;
   }).join('');
   const allSelected = currentGroup === 'all';
-  html += `<button type="button" class="dyn-group-row" style="${rowStyle}border-bottom:none;${allSelected?'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);':'color:var(--text);'}" onclick="switchGroup('all')">الكل${allSelected?' ✓':''}</button>`;
+  const allLocked = isAllLocked(currentSubject, currentContentType, currentTrimester);
+  const allLabel = (allLocked ? '🔒 ' : '') + 'الكل';
+  const allClick = allLocked ? `openUpgradeModal('group')` : `switchGroup('all')`;
+  const allStyle = allLocked ? 'color:var(--text-sub,#999);' : (allSelected ? 'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);' : 'color:var(--text);');
+  html += `<button type="button" class="dyn-group-row" style="${rowStyle}border-bottom:none;${allStyle}" onclick="${allClick}">${allLabel}${allSelected && !allLocked?' ✓':''}</button>`;
   container.innerHTML = html;
 
   // Collapsed-state label always reflects the current selection
