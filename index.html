@@ -157,6 +157,7 @@
     font-size: 0.95rem; border-radius: 12px; margin-top: 6px;
   }
   .btn-primary:not(:disabled):hover { filter: brightness(1.1); }
+  #upgrade-cta-btn:hover { filter: brightness(1.1); }
   .btn-ghost { background: transparent; border: 1px solid var(--accent-border); color: var(--accent); }
   .btn-ghost:not(:disabled):hover { background: var(--accent-dim); }
   .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--input-border); }
@@ -1133,7 +1134,7 @@ select.form-input{appearance:auto;}
       <div class="pill" id="menu-overall-pill">0%</div>
     </div>
   </div>
-  <button class="btn btn-primary" id="upgrade-cta-btn" onclick="openUpgradeModal('cta')" style="display:none;width:100%;margin-bottom:12px;font-weight:800;">✨ احصل على الوصول الكامل</button>
+  <button class="btn" id="upgrade-cta-btn" onclick="openUpgradeModal('cta')" style="display:none;width:100%;margin-bottom:12px;padding:13px;border-radius:12px;font-size:0.95rem;font-weight:800;color:#fff;border:none;background:linear-gradient(135deg,#a06cd5,#7c3fc4);box-shadow:0 4px 18px rgba(124,63,196,0.45);">✨ احصل على الوصول الكامل</button>
   <div class="subject-switcher">
     <button class="subject-btn active" id="subj-hist" onclick="switchSubject('history')">📜 التاريخ</button>
     <button class="subject-btn" id="subj-geo" onclick="switchSubject('geography')">🌍 الجغرافيا</button>
@@ -1868,6 +1869,7 @@ function getFullGroupCatalog(subject, contentType, trimester) {
   return ((GROUP_CATALOG[subject] || {})[contentType] || {})[trimester] || {};
 }
 function isGroupLocked(subject, contentType, trimester, groupNum) {
+  if (CURRENT_ENTITLEMENT_IS_FULL) return false; // FULL users never see any lock, anywhere
   const entry = getFullGroupCatalog(subject, contentType, trimester)[groupNum];
   return entry ? !entry.allFree : false; // unknown group (shouldn't happen) defaults to unlocked rather than hiding it
 }
@@ -1876,6 +1878,7 @@ function isGroupLocked(subject, contentType, trimester, groupNum) {
 // A trimester with any free group (trimester 1 today) stays accessible under "all" and
 // naturally shows only its free subset, since the underlying words query is RLS-scoped.
 function isAllLocked(subject, contentType, trimester) {
+  if (CURRENT_ENTITLEMENT_IS_FULL) return false; // FULL users never see any lock, anywhere
   const catalog = getFullGroupCatalog(subject, contentType, trimester);
   const groupNums = Object.keys(catalog);
   return groupNums.length > 0 && groupNums.every(g => !catalog[g].allFree);
@@ -1955,6 +1958,19 @@ function availableContentTypes(subject) {
 }
 function availableTrimesters(subject, contentType) {
   return Object.keys((ALL_WORDS_DB[subject] || {})[contentType] || {}).map(Number).sort((a,b)=>a-b);
+}
+// Full trimester list INCLUDING ones with zero free content (e.g. trimesters 2/3 today) --
+// unlike availableTrimesters, which only sees whatever survived tier RLS. Used for the
+// tab bar so locked trimesters still appear (and can be shown as locked) rather than
+// silently vanishing.
+function getFullTrimesterList(subject, contentType) {
+  return Object.keys((GROUP_CATALOG[subject] || {})[contentType] || {}).map(Number).sort((a,b)=>a-b);
+}
+function isTrimesterLocked(subject, contentType, trimester) {
+  if (CURRENT_ENTITLEMENT_IS_FULL) return false;
+  const catalog = getFullGroupCatalog(subject, contentType, trimester);
+  const groupNums = Object.keys(catalog);
+  return groupNums.length > 0 && groupNums.every(g => !catalog[g].allFree);
 }
 function getGroupNames(subject, contentType, trimester) {
   const node = ((ALL_WORDS_DB[subject]||{})[contentType]||{})[trimester] || {};
@@ -2072,12 +2088,14 @@ function renderContentTypeTabs() {
 function renderTrimesterTabs() {
   const el = document.getElementById('tri-tabs');
   if (!el) return;
-  const tris = availableTrimesters(currentSubject, currentContentType);
+  const tris = getFullTrimesterList(currentSubject, currentContentType);
   if (tris.length <= 1) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = 'flex';
-  el.innerHTML = tris.map(t =>
-    `<button class="btn ${t===currentTrimester?'btn-primary':'btn-ghost'}" style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchTrimester(${t})">الفصل ${t}</button>`
-  ).join('');
+  el.innerHTML = tris.map(t => {
+    const locked = isTrimesterLocked(currentSubject, currentContentType, t);
+    const label = (locked ? '🔒 ' : '') + 'الفصل ' + t;
+    return `<button class="btn ${t===currentTrimester?'btn-primary':'btn-ghost'}" style="flex:1;font-size:0.75rem;padding:8px 4px;" onclick="switchTrimester(${t})">${label}</button>`;
+  }).join('');
 }
 
 // Accordion for the groups list — collapsed by default so 6-11 groups don't eat the
@@ -2105,7 +2123,7 @@ function renderDynGroupBtns() {
   const rowStyle = 'width:100%;display:block;text-align:right;padding:12px 14px;border:none;border-bottom:1px solid var(--input-border,#e0d5c5);background:transparent;font-family:Cairo,sans-serif;font-size:0.85rem;cursor:pointer;';
   let html = groups.map(g => {
     const selected = parseInt(g) === currentGroup;
-    const locked = !fullCatalog[g].allFree;
+    const locked = isGroupLocked(currentSubject, currentContentType, currentTrimester, g);
     const label = (locked ? '🔒 ' : '') + escapeHtml(fullCatalog[g].name || names[g] || `المجموعة ${g}`);
     const click = locked ? `openUpgradeModal('group')` : `switchGroup(${g})`;
     const lockedStyle = locked ? 'color:var(--text-sub,#999);' : (selected ? 'font-weight:800;color:var(--gold,#b8860b);background:var(--input-bg,#faf6ee);' : 'color:var(--text);');
