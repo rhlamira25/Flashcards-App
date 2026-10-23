@@ -993,24 +993,55 @@ select.form-input{appearance:auto;}
     <!-- Signup Form -->
     <div id="form-signup" style="display:none">
       <div class="form-group">
+        <label class="form-label">الاسم</label>
+        <input type="text" class="form-input" id="signup-firstname" placeholder="الاسم" style="direction:rtl;text-align:right;" oninput="updateSignupBtnState()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">اللقب</label>
+        <input type="text" class="form-input" id="signup-lastname" placeholder="اللقب" style="direction:rtl;text-align:right;" oninput="updateSignupBtnState()">
+      </div>
+      <div class="form-group">
         <label class="form-label">البريد الإلكتروني</label>
-        <input type="email" class="form-input" id="signup-email" placeholder="example@email.com">
+        <input type="email" class="form-input" id="signup-email" placeholder="example@email.com" oninput="updateSignupBtnState()">
       </div>
       <div class="form-group">
         <label class="form-label">كلمة المرور</label>
         <div class="pw-wrap">
-          <input type="password" class="form-input" id="signup-password" placeholder="••••••••">
+          <input type="password" class="form-input" id="signup-password" placeholder="••••••••" oninput="onSignupPasswordInput()">
           <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('signup-password', this)" aria-label="إظهار كلمة المرور">👁️</button>
         </div>
+        <div id="signup-password-checklist" style="margin-top:6px;display:grid;gap:2px;"></div>
       </div>
       <div class="form-group">
         <label class="form-label">تأكيد كلمة المرور</label>
         <div class="pw-wrap">
-          <input type="password" class="form-input" id="signup-password2" placeholder="••••••••">
+          <input type="password" class="form-input" id="signup-password2" placeholder="••••••••" oninput="updateSignupBtnState()">
           <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('signup-password2', this)" aria-label="إظهار كلمة المرور">👁️</button>
         </div>
+        <div id="signup-password-match-error" style="font-size:0.75rem;color:#c0392b;display:none;margin-top:4px;">كلمتا المرور غير متطابقتين</div>
       </div>
-      <button class="btn btn-primary" onclick="handleSignup()" id="signup-btn">إنشاء حساب ←</button>
+      <div class="form-group">
+        <label class="form-label">تاريخ الميلاد</label>
+        <input type="date" class="form-input" id="signup-dob" style="direction:ltr;" oninput="updateSignupBtnState()">
+      </div>
+      <div class="form-group">
+        <label class="form-label">نوع المترشح</label>
+        <div style="display:flex;gap:8px;flex-direction:column;margin-top:4px;">
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;cursor:pointer;" id="signup-type-label-1">
+            <input type="radio" name="signup-student-type" value="تلميذ نظامي" onchange="selectSignupStudentType(this)" style="accent-color:var(--accent);">
+            <span style="font-size:0.88rem;">تلميذ نظامي</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;cursor:pointer;" id="signup-type-label-2">
+            <input type="radio" name="signup-student-type" value="مترشح حر" onchange="selectSignupStudentType(this)" style="accent-color:var(--accent);">
+            <span style="font-size:0.88rem;">مترشح حر</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;cursor:pointer;" id="signup-type-label-3">
+            <input type="radio" name="signup-student-type" value="غير معني" onchange="selectSignupStudentType(this)" style="accent-color:var(--accent);">
+            <span style="font-size:0.88rem;">غير معني</span>
+          </label>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="handleSignup()" id="signup-btn" disabled>إنشاء حساب ←</button>
     </div>
   </div>
 </div>
@@ -1047,9 +1078,10 @@ select.form-input{appearance:auto;}
     <div class="form-group">
       <label class="form-label">كلمة المرور الجديدة</label>
       <div class="pw-wrap">
-        <input type="password" class="form-input" id="reset-password" placeholder="••••••••">
+        <input type="password" class="form-input" id="reset-password" placeholder="••••••••" oninput="renderPasswordChecklist('reset-password-checklist', this.value)">
         <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('reset-password', this)" aria-label="إظهار كلمة المرور">👁️</button>
       </div>
+      <div id="reset-password-checklist" style="margin-top:6px;display:grid;gap:2px;"></div>
     </div>
     <div class="form-group">
       <label class="form-label">تأكيد كلمة المرور</label>
@@ -1079,45 +1111,13 @@ select.form-input{appearance:auto;}
   </div>
 </div>
 
-<!-- ══ PAGE: PROFILE SETUP ══ -->
-<div id="pg-profile" class="page">
-  <div class="auth-box" style="margin-top:20px;">
-    <div class="auth-logo">
-      <div class="auth-logo-icon">👤</div>
-      <div class="auth-logo-title">أكمل ملفك الشخصي</div>
-      <div class="auth-logo-sub">هذه المعلومات تساعدنا على خدمتك بشكل أفضل</div>
-    </div>
-    <div id="profile-error" class="auth-error"></div>
-    <div class="form-group">
-      <label class="form-label">الاسم</label>
-      <input type="text" class="form-input" id="profile-firstname" placeholder="الاسم" style="direction:rtl;text-align:right;">
-    </div>
-    <div class="form-group">
-      <label class="form-label">اللقب</label>
-      <input type="text" class="form-input" id="profile-lastname" placeholder="اللقب" style="direction:rtl;text-align:right;">
-    </div>
-    <div class="form-group">
-      <label class="form-label">تاريخ الميلاد</label>
-      <input type="date" class="form-input" id="profile-dob" style="direction:ltr;">
-    </div>
-    <div class="form-group">
-      <label class="form-label">نوع المترشح</label>
-      <div style="display:flex;gap:8px;flex-direction:column;margin-top:4px;">
-        <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;cursor:pointer;" id="type-label-1">
-          <input type="radio" name="student-type" value="تلميذ نظامي" onchange="selectStudentType(this)" style="accent-color:var(--accent);">
-          <span style="font-size:0.88rem;">تلميذ نظامي</span>
-        </label>
-        <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;cursor:pointer;" id="type-label-2">
-          <input type="radio" name="student-type" value="مترشح حر" onchange="selectStudentType(this)" style="accent-color:var(--accent);">
-          <span style="font-size:0.88rem;">مترشح حر</span>
-        </label>
-        <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:10px;cursor:pointer;" id="type-label-3">
-          <input type="radio" name="student-type" value="غير معني" onchange="selectStudentType(this)" style="accent-color:var(--accent);">
-          <span style="font-size:0.88rem;">غير معني</span>
-        </label>
-      </div>
-    </div>
-    <button class="btn btn-primary" onclick="saveProfile()" id="profile-btn" style="margin-top:8px;">حفظ وإكمال ←</button>
+<!-- ══ PAGE: CONFIRM EMAIL (only reached if the project requires email confirmation) ══ -->
+<div id="pg-confirm-email" class="page">
+  <div class="pending-box">
+    <div class="pending-icon">📧</div>
+    <div class="pending-title">تحقق من بريدك الإلكتروني</div>
+    <div class="pending-desc">أرسلنا لك رسالة تأكيد. افتح الرابط الموجود فيها ثم سجّل الدخول لإكمال إنشاء حسابك.</div>
+    <button class="btn btn-primary" onclick="showPage('auth'); switchTab('login');" style="width:100%;margin-top:14px;">الذهاب إلى تسجيل الدخول ←</button>
   </div>
 </div>
 
@@ -1135,6 +1135,10 @@ select.form-input{appearance:auto;}
     </div>
   </div>
   <button class="btn" id="upgrade-cta-btn" onclick="openUpgradeModal('cta')" style="display:none;width:100%;margin-bottom:12px;padding:13px;border-radius:12px;font-size:0.95rem;font-weight:800;color:#fff;border:none;background:linear-gradient(135deg,#a06cd5,#7c3fc4);box-shadow:0 4px 18px rgba(124,63,196,0.45);">✨ احصل على الوصول الكامل</button>
+  <div id="push-card" style="display:none;width:100%;max-width:420px;margin-bottom:12px;padding:12px 14px;background:var(--card-bg);border:1px solid var(--border);border-radius:12px;">
+    <div id="push-desc" style="font-size:0.8rem;color:var(--text);line-height:1.7;margin-bottom:8px;"></div>
+    <button class="btn btn-secondary" id="push-btn" style="width:100%;"></button>
+  </div>
   <div class="subject-switcher">
     <button class="subject-btn active" id="subj-hist" onclick="switchSubject('history')">📜 التاريخ</button>
     <button class="subject-btn" id="subj-geo" onclick="switchSubject('geography')">🌍 الجغرافيا</button>
@@ -1584,6 +1588,70 @@ const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 //  AUTH
 // ══════════════════════════════════════
 let currentUser = null;
+
+// ══════════════════════════════════════
+//  SHARED PASSWORD POLICY — used by both signup and password reset, so the two
+//  can never drift apart. The live checklist is a UI aid only; isPasswordValid()
+//  is called independently in both handlers before ever calling Supabase.
+// ══════════════════════════════════════
+function getPasswordChecks(pw) {
+  return {
+    len: pw.length >= 8,
+    upper: /[A-Z]/.test(pw),
+    lower: /[a-z]/.test(pw),
+    number: /[0-9]/.test(pw),
+    special: /[^A-Za-z0-9]/.test(pw)
+  };
+}
+function isPasswordValid(pw) {
+  const c = getPasswordChecks(pw);
+  return c.len && c.upper && c.lower && c.number && c.special;
+}
+function renderPasswordChecklist(listId, pw) {
+  const el = document.getElementById(listId);
+  if (!el) return;
+  const c = getPasswordChecks(pw);
+  const items = [
+    [c.len, '8 أحرف على الأقل'],
+    [c.upper, 'حرف كبير واحد (A-Z)'],
+    [c.lower, 'حرف صغير واحد (a-z)'],
+    [c.number, 'رقم واحد على الأقل'],
+    [c.special, 'رمز خاص واحد على الأقل']
+  ];
+  el.innerHTML = items.map(([ok, label]) =>
+    `<div style="font-size:0.75rem;color:${ok ? '#3aa65c' : '#c0392b'};">${ok ? '✓' : '✗'} ${label}</div>`
+  ).join('');
+  return c.len && c.upper && c.lower && c.number && c.special;
+}
+let selectedSignupStudentType = null;
+function selectSignupStudentType(radio) {
+  document.querySelectorAll('[id^="signup-type-label-"]').forEach(l => { l.style.borderColor = 'var(--input-border)'; });
+  radio.closest('label').style.borderColor = 'var(--accent)';
+  selectedSignupStudentType = radio.value;
+  updateSignupBtnState();
+}
+function onSignupPasswordInput() {
+  renderPasswordChecklist('signup-password-checklist', document.getElementById('signup-password').value);
+  updateSignupBtnState();
+}
+// Create Account stays disabled until every requirement is actually satisfied --
+// the preferred option per the task, rather than allowing a click that then fails.
+function updateSignupBtnState() {
+  const btn = document.getElementById('signup-btn');
+  if (!btn) return;
+  const firstName = document.getElementById('signup-firstname')?.value.trim();
+  const lastName = document.getElementById('signup-lastname')?.value.trim();
+  const email = document.getElementById('signup-email')?.value.trim();
+  const pw = document.getElementById('signup-password')?.value || '';
+  const pw2 = document.getElementById('signup-password2')?.value || '';
+  const dob = document.getElementById('signup-dob')?.value;
+  const matchErr = document.getElementById('signup-password-match-error');
+  const mismatch = pw2.length > 0 && pw !== pw2;
+  if (matchErr) matchErr.style.display = mismatch ? '' : 'none';
+  const ok = firstName && lastName && email && dob && selectedSignupStudentType &&
+    isPasswordValid(pw) && pw === pw2 && pw2.length > 0;
+  btn.disabled = !ok;
+}
 // Same placeholder already defined in the send-registration-email edge function --
 // reused here rather than inventing a separate URL. Update in both places together.
 const INSTAGRAM_SUBSCRIBE_LINK = 'https://instagram.com/YOUR_HANDLE_HERE';
@@ -1696,7 +1764,7 @@ async function handleResetPassword() {
   const pw2 = document.getElementById('reset-password2').value;
   if (!pw || !pw2) { showError('reset-error', 'يرجى ملء الحقلين'); return; }
   if (pw !== pw2) { showError('reset-error', 'كلمتا المرور غير متطابقتين'); return; }
-  if (pw.length < 6) { showError('reset-error', 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+  if (!isPasswordValid(pw)) { showError('reset-error', 'كلمة المرور لا تستوفي جميع الشروط المطلوبة'); return; }
   const btn = document.getElementById('reset-btn');
   btn.disabled = true; btn.textContent = '...جاري الحفظ';
   const { data, error } = await db.auth.updateUser({ password: pw });
@@ -1719,75 +1787,101 @@ async function handleLogin() {
 }
 
 async function handleSignup() {
+  const firstName = document.getElementById('signup-firstname').value.trim();
+  const lastName = document.getElementById('signup-lastname').value.trim();
   const email = document.getElementById('signup-email').value.trim();
   const password = document.getElementById('signup-password').value;
   const password2 = document.getElementById('signup-password2').value;
-  if (!email || !password) { showError('auth-error', 'يرجى ملء جميع الحقول'); return; }
+  const dob = document.getElementById('signup-dob').value;
+  const studentType = selectedSignupStudentType;
+  // Independent of the disabled-button state: never trust the UI alone.
+  if (!firstName || !lastName || !email || !dob || !studentType) { showError('auth-error', 'يرجى ملء جميع الحقول'); return; }
+  if (!isPasswordValid(password)) { showError('auth-error', 'كلمة المرور لا تستوفي جميع الشروط المطلوبة'); return; }
   if (password !== password2) { showError('auth-error', 'كلمتا المرور غير متطابقتين'); return; }
-  if (password.length < 6) { showError('auth-error', 'كلمة المرور يجب أن تكون 6 أحرف على الأقل'); return; }
+
   const btn = document.getElementById('signup-btn');
   btn.disabled = true; btn.textContent = '...جاري الإنشاء';
   const { data, error } = await db.auth.signUp({ email, password });
-  btn.disabled = false; btn.textContent = 'إنشاء حساب ←';
-  if (error) { showError('auth-error', 'حدث خطأ، جرب بريداً آخر'); return; }
-  // Create profile row (best-effort: if this fails, checkUserAccess() self-heals
-  // by creating the profile on the user's next real login, under a real session)
-  const { error: profileInsertErr } = await db.from('profiles').insert({ email, is_approved: false });
-  if (profileInsertErr) console.error('signup profile insert failed:', profileInsertErr);
-  showSuccess('auth-success', 'تم إنشاء الحساب! يمكنك تسجيل الدخول الآن');
-  switchTab('login');
-  sendRegistrationEmail(email);
+  btn.textContent = 'إنشاء حساب ←';
+  if (error) { updateSignupBtnState(); showError('auth-error', 'حدث خطأ، جرب بريداً آخر'); return; }
+
+  const profileFields = { first_name: firstName, last_name: lastName, date_of_birth: dob, student_type: studentType };
+
+  if (data.session) {
+    // Confirmation disabled: we already have a real session, so write the full profile now.
+    currentUser = data.user;
+    const { error: insErr } = await dbWrite(
+      db.from('profiles').insert({ email, is_approved: false, ...profileFields }),
+      { context: 'handleSignup profile insert', message: 'تعذّر حفظ معلوماتك، حاول مرة أخرى.' });
+    if (insErr) { updateSignupBtnState(); return; }
+    sendRegistrationEmail(email, firstName);
+    CURRENT_ENTITLEMENT_IS_FULL = false;
+    showPage('free-welcome');
+    return;
+  }
+
+  // Confirmation required: no session yet, so RLS would block the write. Keep the
+  // details and finish the profile on the first confirmed login (checkUserAccess).
+  try { sessionStorage.setItem('pendingSignupProfile', JSON.stringify({ email, ...profileFields })); } catch {}
+  showPage('confirm-email');
 }
 
-async function sendRegistrationEmail(email) {
-  // Best-effort: signup already succeeded above, so a failed email here
-  // never blocks or reverses account creation.
+async function sendRegistrationEmail(email, firstName) {
+  // Best-effort: signup already succeeded, so a failed email never blocks account creation.
   try {
     const { data: { session } } = await db.auth.getSession();
-    if (!session) return; // signUp() may require email confirmation before a session exists — nothing to send with yet
+    if (!session) return;
     await fetch(`${SUPABASE_URL}/functions/v1/send-registration-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ email })
+      body: JSON.stringify({ email, firstName })
     });
   } catch (e) {
     console.error('sendRegistrationEmail failed:', e);
   }
 }
 
+function readPendingSignupProfile(email) {
+  try {
+    const raw = sessionStorage.getItem('pendingSignupProfile');
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    return p && p.email && p.email.toLowerCase() === (email || '').toLowerCase() ? p : null;
+  } catch { return null; }
+}
+
 async function checkUserAccess(user) {
   currentUser = user;
   const { data: profiles } = await db.from('profiles').select('*').eq('email', user.email);
-  const profile = profiles && profiles.length > 0 ? profiles[0] : null;
+  let profile = profiles && profiles.length > 0 ? profiles[0] : null;
 
-  if (!profile) {
-    // New user — create profile row and ask for info
-    const { error: createErr } = await db.from('profiles').insert({ email: user.email, is_approved: false });
-    if (createErr) {
-      console.error('checkUserAccess profile creation failed:', createErr);
-      alert('تعذّر إعداد حسابك. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.');
+  if (!profile || !profile.first_name) {
+    const pending = readPendingSignupProfile(user.email);
+    if (pending) {
+      const { email: _e, ...fields } = pending;
+      const q = profile
+        ? db.from('profiles').update(fields).eq('email', user.email)
+        : db.from('profiles').insert({ email: user.email, is_approved: false, ...fields });
+      const { error: wErr } = await dbWrite(q, { context: 'checkUserAccess pending profile', message: 'تعذّر إكمال إنشاء حسابك، حاول مرة أخرى.' });
+      if (wErr) return;
+      try { sessionStorage.removeItem('pendingSignupProfile'); } catch {}
+      sendRegistrationEmail(user.email, fields.first_name);
+      const { data: again } = await db.from('profiles').select('*').eq('email', user.email);
+      profile = again && again.length > 0 ? again[0] : null;
+      CURRENT_ENTITLEMENT_IS_FULL = false;
+      if (profile) { showPage('free-welcome'); return; }
+    } else {
+      // No standalone profile page exists any more; surface a clear error instead of a dead route.
+      alert('حسابك غير مكتمل. يرجى التواصل مع الدعم لإكمال إعداد الحساب.');
       return;
     }
-    showPage('profile');
-    return;
   }
 
-  if (!profile.first_name) {
-    // Profile exists but info not filled yet
-    showPage('profile');
-    return;
-  }
-
-  // Phase 7: entry is no longer gated by is_approved/expiry_date. Any authenticated
-  // user with a completed profile enters the app immediately -- FREE vs FULL content
-  // access is enforced server-side (words RLS + the entitlement checks added to
-  // create_study_plan/save_plan_edits/persist_answer_and_progress/create_rewrite_test),
-  // not by blocking entry here. is_approved/expiry_date remain meaningful (they still
-  // determine FULL access everywhere else), just not as an application-entry gate.
+  // Phase 7: entry is not gated by is_approved/expiry_date. FREE vs FULL content access is
+  // enforced server-side; this only drives display.
   CURRENT_ENTITLEMENT_IS_FULL = computeIsFullDisplay(profile);
   await initApp();
 }
-
 
 async function handleLogout() {
   await db.auth.signOut();
@@ -2029,6 +2123,7 @@ let rwVariants = {}; // { wordId: [acceptedVariantStrings] }
 let lastMode = 'qcm';
 
 async function initApp() {
+  refreshPushUI();
   showPage('loading');
   await loadWordsFromDB();
   currentSubject = 'history';
@@ -5128,48 +5223,101 @@ function showSearchResult(id) {
 }
 
 // ══════════════════════════════════════
-//  PROFILE
+//  PUSH NOTIFICATIONS (revision reminders)
 // ══════════════════════════════════════
-function selectStudentType(radio) {
-  document.querySelectorAll('[id^="type-label-"]').forEach(l => {
-    l.style.borderColor = 'rgba(255,255,255,0.18)';
-    l.style.background = 'var(--input-bg)';
-  });
-  radio.closest('label').style.borderColor = 'var(--accent)';
-  radio.closest('label').style.background = 'var(--accent-dim)';
+const VAPID_PUBLIC_KEY = 'BJCa5xJL6JtrkLznNJVIhjY-DxRd9-HroLFpqf18hY46RUDRqxjwwmTv-H2S3mwWddpOwnaxvxkVLNAwBQP3wlo';
+const PUSH_SUPPORTED = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+function urlBase64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
-async function saveProfile() {
-  const firstName = document.getElementById('profile-firstname').value.trim();
-  const lastName = document.getElementById('profile-lastname').value.trim();
-  const dob = document.getElementById('profile-dob').value;
-  const studentType = document.querySelector('input[name="student-type"]:checked')?.value;
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    await navigator.serviceWorker.register('sw.js');
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'PUSH_SUBSCRIPTION_RENEWED') savePushSubscription(e.data.subscription);
+    });
+  } catch (e) { console.error('service worker registration failed:', e); }
+}
 
-  if (!firstName || !lastName) {
-    const el = document.getElementById('profile-error');
-    el.textContent = 'يرجى إدخال الاسم واللقب على الأقل';
-    el.style.display = 'block';
-    setTimeout(() => el.style.display = 'none', 3000);
-    return;
+async function savePushSubscription(subJson) {
+  const { error } = await db.rpc('save_push_subscription', {
+    p_endpoint: subJson.endpoint,
+    p_p256dh: subJson.keys.p256dh,
+    p_auth: subJson.keys.auth,
+    p_user_agent: navigator.userAgent
+  });
+  if (error) console.error('save_push_subscription failed:', error);
+  return !error;
+}
+
+async function getCurrentPushSubscription() {
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+async function subscribeToPush() {
+  if (!PUSH_SUPPORTED) return;
+  const btn = document.getElementById('push-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { await refreshPushUI(); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
+    const ok = await savePushSubscription(sub.toJSON());
+    if (!ok) showErrorToast('تعذّر تفعيل التذكيرات، حاول مرة أخرى.', subscribeToPush);
+  } catch (e) {
+    console.error('subscribeToPush failed:', e);
+    showErrorToast('تعذّر تفعيل التذكيرات، حاول مرة أخرى.', subscribeToPush);
   }
+  await refreshPushUI();
+}
 
-  const btn = document.getElementById('profile-btn');
-  btn.disabled = true; btn.textContent = '...جاري الحفظ';
+async function unsubscribeFromPush() {
+  try {
+    const sub = await getCurrentPushSubscription();
+    if (sub) {
+      await db.rpc('delete_push_subscription', { p_endpoint: sub.endpoint });
+      await sub.unsubscribe();
+    }
+  } catch (e) { console.error('unsubscribeFromPush failed:', e); }
+  await refreshPushUI();
+}
 
-  const { error: profileSaveErr } = await dbWrite(db.from('profiles').update({
-    first_name: firstName,
-    last_name: lastName,
-    date_of_birth: dob || null,
-    student_type: studentType || null
-  }).eq('email', currentUser.email), { context: 'saveProfile', message: 'تعذّر حفظ معلوماتك، حاول مرة أخرى.' });
-
-  btn.disabled = false; btn.textContent = 'حفظ وإكمال ←';
-  if (profileSaveErr) return; // stay on the form instead of proceeding as if it saved
-  // A newly-completed profile is always FREE at this point (is_approved defaults false,
-  // enforced by the protect_profile_privileged_fields_insert trigger) -- show the FREE
-  // welcome screen rather than the old pending/waiting-for-activation screen.
-  CURRENT_ENTITLEMENT_IS_FULL = false;
-  showPage('free-welcome');
+// Renders the menu card for the current permission/subscription state.
+async function refreshPushUI() {
+  const card = document.getElementById('push-card');
+  if (!card) return;
+  if (!PUSH_SUPPORTED) { card.style.display = 'none'; return; }
+  const desc = document.getElementById('push-desc');
+  const btn = document.getElementById('push-btn');
+  card.style.display = '';
+  btn.disabled = false;
+  const perm = Notification.permission;
+  let sub = null;
+  try { sub = perm === 'granted' ? await getCurrentPushSubscription() : null; } catch {}
+  if (perm === 'denied') {
+    desc.textContent = 'الإشعارات محظورة في المتصفح. فعّلها من إعدادات الموقع في متصفحك إن أردت تلقي التذكيرات.';
+    btn.style.display = 'none';
+  } else if (perm === 'granted' && sub) {
+    // Keep the server row fresh (idempotent upsert by endpoint) and offer turn-off.
+    savePushSubscription(sub.toJSON());
+    desc.textContent = '✅ التذكيرات مفعّلة. سنرسل لك إشعاراً يومياً عند وجود مراجعات مستحقة.';
+    btn.style.display = '';
+    btn.textContent = 'إيقاف التذكيرات';
+    btn.onclick = unsubscribeFromPush;
+  } else {
+    desc.textContent = 'سنرسل لك إشعاراً مرة واحدة يومياً فقط عندما تكون لديك مراجعات مستحقة، لتحافظ على ما حفظته.';
+    btn.style.display = '';
+    btn.textContent = '🔔 تفعيل تذكيرات المراجعة';
+    btn.onclick = subscribeToPush;
+  }
 }
 
 // ══════════════════════════════════════
@@ -5185,6 +5333,7 @@ db.auth.onAuthStateChange((event, session) => {
     document.getElementById('reset-success').style.display = 'none';
     document.getElementById('reset-password').value = '';
     document.getElementById('reset-password2').value = '';
+    renderPasswordChecklist('reset-password-checklist', '');
     showPage('reset-password');
   }
 });
@@ -5205,6 +5354,7 @@ function checkUrlAuthError() {
   return true;
 }
 
+registerServiceWorker();
 (async function() {
   if (checkUrlAuthError()) return;
   if (__recoveryLinkDetected) {
