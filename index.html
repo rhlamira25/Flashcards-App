@@ -955,7 +955,12 @@ select.form-input{appearance:auto;}
 
 <!-- ══ PAGE: LOADING ══ -->
 <div id="pg-loading" class="page active">
-  <div style="margin-top:40vh"><div class="spinner"></div></div>
+  <div id="loading-spinner" style="margin-top:40vh"><div class="spinner"></div></div>
+  <div id="access-error" style="display:none;margin-top:30vh;text-align:center;padding:0 24px;">
+    <div id="access-error-msg" style="font-size:0.9rem;color:var(--text);line-height:1.8;margin-bottom:14px;"></div>
+    <button class="btn btn-primary" id="access-retry-btn" style="width:100%;max-width:320px;">إعادة المحاولة</button>
+    <button class="btn btn-ghost" onclick="handleLogout()" style="width:100%;max-width:320px;margin-top:8px;">تسجيل الخروج</button>
+  </div>
 </div>
 
 <!-- ══ PAGE: AUTH ══ -->
@@ -1661,14 +1666,52 @@ const INSTAGRAM_SUBSCRIBE_LINK = 'https://instagram.com/YOUR_HANDLE_HERE';
 // authorization boundary is entirely server-side (words/content-table RLS + the RPC
 // entitlement checks); this value is never passed to or trusted by any RPC, and a
 // wrong value here can only ever produce a UI mismatch, never a security bypass.
-let CURRENT_ENTITLEMENT_IS_FULL = false;
+// THREE-STATE entitlement. 'unknown' = the server-backed profile check has not completed (or failed);
+// it is never treated as free OR full -- nothing content-related is reachable until it resolves.
+// This is a DISPLAY/UX mirror only; the real boundary is words RLS + the RPC entitlement checks.
+let ENTITLEMENT = 'unknown'; // 'unknown' | 'free' | 'full'
+// Bumped on every account change (login, logout, session end). Async work captures it at start and
+// discards its result if it changed, so a slow request for account A can never apply to account B.
+let AUTH_EPOCH = 0;
+// True only when this account's words + group catalog have both loaded successfully.
+let CONTENT_READY = false;
+function appReady() { return ENTITLEMENT !== 'unknown' && CONTENT_READY; }
+// Rejects if the promise (e.g. a Supabase query) takes too long, so a stalled network fails closed
+// into a retry screen instead of an endless spinner.
+function withTimeout(p, ms = 20000) {
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), ms); });
+  return Promise.race([Promise.resolve(p), timeout]).finally(() => clearTimeout(t));
+}
+// Drops everything that belongs to the previous account. Does not touch currentUser/auth.
+function resetUserScopedState() {
+  ENTITLEMENT = 'unknown'; CONTENT_READY = false;
+  ALL_WORDS_DB = {}; GROUP_CATALOG = {}; ALL_WORDS = {}; WORDS = [];
+  progress = { scores: {}, sessions: 0 };
+  currentSubject = 'history'; currentContentType = 'term'; currentTrimester = 1; currentGroup = 1;
+  qcmQuestions = []; qcmAnswers = []; rwQuestions = []; rwAnswers = []; fcLiveMastery = new Map();
+  isReviewSession = false; isPlanLearnSession = false; isSecondChanceRetest = false;
+  currentPlan = null; planDraft = null; editingPlanId = null; rwVariants = {};
+}
+function showLoadingState() {
+  const sp = document.getElementById('loading-spinner'), er = document.getElementById('access-error');
+  if (sp) sp.style.display = ''; if (er) er.style.display = 'none';
+}
+// Fail closed: show the problem with a retry. Never falls back to any access level.
+function showAccessError(msg, retryFn) {
+  const sp = document.getElementById('loading-spinner'), er = document.getElementById('access-error');
+  document.getElementById('access-error-msg').textContent = msg;
+  document.getElementById('access-retry-btn').onclick = () => { showLoadingState(); retryFn(); };
+  if (sp) sp.style.display = 'none'; if (er) er.style.display = '';
+  showPage('loading');
+}
 function computeIsFullDisplay(profile) {
   if (!profile || !profile.is_approved || !profile.expiry_date) return false;
   return new Date(profile.expiry_date) > new Date();
 }
 function updateUpgradeCTA() {
   const btn = document.getElementById('upgrade-cta-btn');
-  if (btn) btn.style.display = CURRENT_ENTITLEMENT_IS_FULL ? 'none' : '';
+  if (btn) btn.style.display = ENTITLEMENT === 'free' ? '' : 'none';
 }
 
 function showPage(id) {
@@ -1809,13 +1852,14 @@ async function handleSignup() {
 
   if (data.session) {
     // Confirmation disabled: we already have a real session, so write the full profile now.
+    AUTH_EPOCH++; resetUserScopedState();
     currentUser = data.user;
     const { error: insErr } = await dbWrite(
       db.from('profiles').insert({ email, is_approved: false, ...profileFields }),
       { context: 'handleSignup profile insert', message: 'تعذّر حفظ معلوماتك، حاول مرة أخرى.' });
     if (insErr) { updateSignupBtnState(); return; }
     sendRegistrationEmail(email, firstName);
-    CURRENT_ENTITLEMENT_IS_FULL = false;
+    ENTITLEMENT = 'free'; // brand-new profile: is_approved is forced false by the insert trigger
     showPage('free-welcome');
     return;
   }
@@ -1851,9 +1895,25 @@ function readPendingSignupProfile(email) {
 }
 
 async function checkUserAccess(user) {
+  const epoch = ++AUTH_EPOCH;
+  // A different account than the one whose content is cached: drop all of it before anything else.
+  if (!currentUser || currentUser.id !== user.id) resetUserScopedState();
   currentUser = user;
-  const { data: profiles } = await db.from('profiles').select('*').eq('email', user.email);
-  let profile = profiles && profiles.length > 0 ? profiles[0] : null;
+  ENTITLEMENT = 'unknown'; CONTENT_READY = false;
+  showLoadingState(); showPage('loading');
+  const retry = () => checkUserAccess(user);
+
+  let profile = null, fetchErr = null;
+  try {
+    const res = await withTimeout(db.from('profiles').select('*').eq('email', user.email));
+    fetchErr = res.error; profile = (res.data && res.data.length > 0) ? res.data[0] : null;
+  } catch (e) { fetchErr = e; }
+  if (epoch !== AUTH_EPOCH) return; // account changed while this was in flight
+  if (fetchErr) {
+    console.error('checkUserAccess profile fetch failed:', fetchErr);
+    showAccessError('تعذّر التحقق من حسابك. تحقق من اتصالك ثم أعد المحاولة.', retry);
+    return;
+  }
 
   if (!profile || !profile.first_name) {
     const pending = readPendingSignupProfile(user.email);
@@ -1863,23 +1923,22 @@ async function checkUserAccess(user) {
         ? db.from('profiles').update(fields).eq('email', user.email)
         : db.from('profiles').insert({ email: user.email, is_approved: false, ...fields });
       const { error: wErr } = await dbWrite(q, { context: 'checkUserAccess pending profile', message: 'تعذّر إكمال إنشاء حسابك، حاول مرة أخرى.' });
-      if (wErr) return;
+      if (epoch !== AUTH_EPOCH) return;
+      if (wErr) { showAccessError('تعذّر إكمال إنشاء حسابك. أعد المحاولة.', retry); return; }
       try { sessionStorage.removeItem('pendingSignupProfile'); } catch {}
       sendRegistrationEmail(user.email, fields.first_name);
-      const { data: again } = await db.from('profiles').select('*').eq('email', user.email);
-      profile = again && again.length > 0 ? again[0] : null;
-      CURRENT_ENTITLEMENT_IS_FULL = false;
-      if (profile) { showPage('free-welcome'); return; }
-    } else {
-      // No standalone profile page exists any more; surface a clear error instead of a dead route.
-      alert('حسابك غير مكتمل. يرجى التواصل مع الدعم لإكمال إعداد الحساب.');
+      ENTITLEMENT = 'free'; // freshly created profile: never approved
+      showPage('free-welcome');
       return;
     }
+    // No standalone profile page exists any more; show a clear, retryable message (never a dead route).
+    showAccessError('حسابك غير مكتمل. يرجى التواصل مع الدعم لإكمال إعداد الحساب.', retry);
+    return;
   }
 
-  // Phase 7: entry is not gated by is_approved/expiry_date. FREE vs FULL content access is
-  // enforced server-side; this only drives display.
-  CURRENT_ENTITLEMENT_IS_FULL = computeIsFullDisplay(profile);
+  // Entitlement confirmed from the server-read profile row. FREE vs FULL content is still enforced
+  // server-side (words RLS + entitlement checks in the RPCs); this only drives what the UI shows.
+  ENTITLEMENT = computeIsFullDisplay(profile) ? 'full' : 'free';
   await initApp();
 }
 
@@ -1909,10 +1968,13 @@ function resetAuthForms() {
 }
 
 async function handleLogout() {
-  await db.auth.signOut();
+  // Invalidate in-flight work and drop the previous account's content FIRST, then sign out.
+  AUTH_EPOCH++;
+  resetUserScopedState();
   currentUser = null;
   resetAuthForms();
   showPage('auth');
+  try { await db.auth.signOut(); } catch (e) { console.error('signOut failed:', e); }
 }
 
 // ══════════════════════════════════════
@@ -1936,51 +1998,53 @@ syncThemeIcons();
 // ══════════════════════════════════════
 // { history: { term: { 1: {1:[...],2:[...]}, 2: {...} }, date: {...}, personality: {...} }, geography: {...} }
 let ALL_WORDS_DB = {};
-let WORDS_LOADED = false;
 // Safe, content-free structural catalog (from the word_group_catalog view) -- covers
 // EVERY group regardless of tier, so FREE users can see the full curriculum structure
 // (including locked groups) without ever loading locked concept content. Never put
 // term/definition data in here.
 let GROUP_CATALOG = {};
 
+// Loads this account's words (RLS-scoped) and the structural catalog TOGETHER, and commits both or
+// neither: a half-loaded state (words without the catalog) used to leave every lock off. Returns true
+// only on full success; discards the result if the account changed while the requests were pending.
 async function loadWordsFromDB() {
-  if (WORDS_LOADED) return;
-  const { data: words, error } = await db.from('words').select('*').order('group_number').order('id');
-  if (error || !words) { console.error('Failed to load words:', error); return; }
+  if (CONTENT_READY) return true;
+  if (ENTITLEMENT === 'unknown') return false; // never fetch content before access is resolved
+  const epoch = AUTH_EPOCH;
+  let wRes, cRes;
+  try {
+    [wRes, cRes] = await Promise.all([
+      withTimeout(db.from('words').select('*').order('group_number').order('id')),
+      withTimeout(db.from('word_group_catalog').select('*'))
+    ]);
+  } catch (e) { console.error('Failed to load content:', e); return false; }
+  if (epoch !== AUTH_EPOCH) return false;
+  if (wRes.error || !wRes.data || cRes.error || !cRes.data) {
+    console.error('Failed to load content:', wRes.error, cRes.error); return false;
+  }
 
-  ALL_WORDS_DB = {};
-  words.forEach(w => {
-    const subj = w.subject;
-    const ct = w.content_type || 'term';
-    const tri = w.trimester || 1;
-    const grp = w.group_number;
-    if (!ALL_WORDS_DB[subj]) ALL_WORDS_DB[subj] = {};
-    if (!ALL_WORDS_DB[subj][ct]) ALL_WORDS_DB[subj][ct] = {};
-    if (!ALL_WORDS_DB[subj][ct][tri]) ALL_WORDS_DB[subj][ct][tri] = {};
-    if (!ALL_WORDS_DB[subj][ct][tri][grp]) ALL_WORDS_DB[subj][ct][tri][grp] = [];
-    ALL_WORDS_DB[subj][ct][tri][grp].push({
-      id: w.id,
-      term: w.term,
-      def: w.definition,
-      group_name: w.group_name,
-      lesson: w.lesson,
-      trimester: tri,
-      content_type: ct,
-      group_number: grp
+  const newWords = {};
+  wRes.data.forEach(w => {
+    const subj = w.subject, ct = w.content_type || 'term', tri = w.trimester || 1, grp = w.group_number;
+    if (!newWords[subj]) newWords[subj] = {};
+    if (!newWords[subj][ct]) newWords[subj][ct] = {};
+    if (!newWords[subj][ct][tri]) newWords[subj][ct][tri] = {};
+    if (!newWords[subj][ct][tri][grp]) newWords[subj][ct][tri][grp] = [];
+    newWords[subj][ct][tri][grp].push({
+      id: w.id, term: w.term, def: w.definition, group_name: w.group_name, lesson: w.lesson,
+      trimester: tri, content_type: ct, group_number: grp
     });
   });
-  WORDS_LOADED = true;
-
-  const { data: catalogRows, error: catErr } = await db.from('word_group_catalog').select('*');
-  if (catErr || !catalogRows) { console.error('Failed to load group catalog:', catErr); return; }
-  GROUP_CATALOG = {};
-  catalogRows.forEach(r => {
+  const newCatalog = {};
+  cRes.data.forEach(r => {
     const subj = r.subject, ct = r.content_type || 'term', tri = r.trimester || 1, grp = r.group_number;
-    if (!GROUP_CATALOG[subj]) GROUP_CATALOG[subj] = {};
-    if (!GROUP_CATALOG[subj][ct]) GROUP_CATALOG[subj][ct] = {};
-    if (!GROUP_CATALOG[subj][ct][tri]) GROUP_CATALOG[subj][ct][tri] = {};
-    GROUP_CATALOG[subj][ct][tri][grp] = { name: r.group_name, allFree: !!r.all_free, count: r.concept_count };
+    if (!newCatalog[subj]) newCatalog[subj] = {};
+    if (!newCatalog[subj][ct]) newCatalog[subj][ct] = {};
+    if (!newCatalog[subj][ct][tri]) newCatalog[subj][ct][tri] = {};
+    newCatalog[subj][ct][tri][grp] = { name: r.group_name, allFree: !!r.all_free, count: r.concept_count };
   });
+  ALL_WORDS_DB = newWords; GROUP_CATALOG = newCatalog; CONTENT_READY = true;
+  return true;
 }
 
 // Full group list for a subject/content-type/trimester, INCLUDING locked groups --
@@ -1989,19 +2053,21 @@ function getFullGroupCatalog(subject, contentType, trimester) {
   return ((GROUP_CATALOG[subject] || {})[contentType] || {})[trimester] || {};
 }
 function isGroupLocked(subject, contentType, trimester, groupNum) {
-  if (CURRENT_ENTITLEMENT_IS_FULL) return false; // FULL users never see any lock, anywhere
+  if (ENTITLEMENT === 'full') return false; // confirmed FULL users never see any lock, anywhere
+  if (ENTITLEMENT !== 'free') return true;  // unresolved access: fail closed
   const entry = getFullGroupCatalog(subject, contentType, trimester)[groupNum];
-  return entry ? !entry.allFree : false; // unknown group (shouldn't happen) defaults to unlocked rather than hiding it
+  return entry ? !entry.allFree : true;     // a group missing from the catalog is treated as locked, not open
 }
 // True only when EVERY group in this subject/content-type/trimester is full-tier --
 // i.e. there is nothing free at all to show under "all" (matches trimesters 2/3 today).
 // A trimester with any free group (trimester 1 today) stays accessible under "all" and
 // naturally shows only its free subset, since the underlying words query is RLS-scoped.
 function isAllLocked(subject, contentType, trimester) {
-  if (CURRENT_ENTITLEMENT_IS_FULL) return false; // FULL users never see any lock, anywhere
+  if (ENTITLEMENT === 'full') return false; // confirmed FULL users never see any lock, anywhere
+  if (ENTITLEMENT !== 'free') return true;  // unresolved access: fail closed
   const catalog = getFullGroupCatalog(subject, contentType, trimester);
   const groupNums = Object.keys(catalog);
-  return groupNums.length > 0 && groupNums.every(g => !catalog[g].allFree);
+  return groupNums.length === 0 || groupNums.every(g => !catalog[g].allFree); // no catalog info = locked
 }
 function isCurrentGroupLocked() {
   if (currentGroup === 'all') return isAllLocked(currentSubject, currentContentType, currentTrimester);
@@ -2013,6 +2079,7 @@ function isCurrentGroupLocked() {
 // the upgrade modal instead. fnName is looked up by name so this stays a single
 // small wrapper instead of three near-identical ones.
 function handleModeClick(fnName) {
+  if (!appReady()) return; // access/content not confirmed: no study session from an unverified pool
   if (isCurrentGroupLocked()) { openUpgradeModal('mode'); return; }
   window[fnName]();
 }
@@ -2087,10 +2154,11 @@ function getFullTrimesterList(subject, contentType) {
   return Object.keys((GROUP_CATALOG[subject] || {})[contentType] || {}).map(Number).sort((a,b)=>a-b);
 }
 function isTrimesterLocked(subject, contentType, trimester) {
-  if (CURRENT_ENTITLEMENT_IS_FULL) return false;
+  if (ENTITLEMENT === 'full') return false;
+  if (ENTITLEMENT !== 'free') return true; // unresolved access: fail closed
   const catalog = getFullGroupCatalog(subject, contentType, trimester);
   const groupNums = Object.keys(catalog);
-  return groupNums.length > 0 && groupNums.every(g => !catalog[g].allFree);
+  return groupNums.length === 0 || groupNums.every(g => !catalog[g].allFree);
 }
 function getGroupNames(subject, contentType, trimester) {
   const node = ((ALL_WORDS_DB[subject]||{})[contentType]||{})[trimester] || {};
@@ -2150,8 +2218,15 @@ let lastMode = 'qcm';
 
 async function initApp() {
   refreshPushUI();
-  showPage('loading');
-  await loadWordsFromDB();
+  const epoch = AUTH_EPOCH;
+  showLoadingState(); showPage('loading');
+  if (ENTITLEMENT === 'unknown' || !currentUser) {
+    showAccessError('تعذّر التحقق من حسابك. تحقق من اتصالك ثم أعد المحاولة.', () => currentUser ? checkUserAccess(currentUser) : showPage('auth'));
+    return;
+  }
+  const ok = await loadWordsFromDB();
+  if (epoch !== AUTH_EPOCH) return;
+  if (!ok) { showAccessError('تعذّر تحميل المحتوى. تحقق من اتصالك ثم أعد المحاولة.', initApp); return; }
   currentSubject = 'history';
   currentContentType = availableContentTypes('history')[0] || 'term';
   currentTrimester = availableTrimesters('history', currentContentType)[0] || 1;
@@ -2164,6 +2239,7 @@ async function initApp() {
   updateModeCardLocks();
   updateUpgradeCTA();
   await loadAndRefresh();
+  if (epoch !== AUTH_EPOCH) return;
   showPage('menu');
 }
 
@@ -2171,6 +2247,7 @@ async function initApp() {
 //  SUBJECT & GROUP
 // ══════════════════════════════════════
 async function switchSubject(subj) {
+  if (!appReady()) return; // ignore clicks until access is resolved and content is loaded
   currentSubject = subj;
   document.getElementById('subj-hist').classList.toggle('active', subj === 'history');
   document.getElementById('subj-geo').classList.toggle('active', subj === 'geography');
@@ -2270,6 +2347,7 @@ function renderDynGroupBtns() {
 }
 
 async function switchContentType(ct) {
+  if (!appReady()) return; // ignore clicks until access is resolved and content is loaded
   currentContentType = ct;
   currentTrimester = availableTrimesters(currentSubject, ct)[0] || 1;
   currentGroup = firstAvailableGroup(currentSubject, currentContentType, currentTrimester);
@@ -2282,6 +2360,7 @@ async function switchContentType(ct) {
 }
 
 async function switchTrimester(t) {
+  if (!appReady()) return; // ignore clicks until access is resolved and content is loaded
   currentTrimester = t;
   currentGroup = firstAvailableGroup(currentSubject, currentContentType, currentTrimester);
   renderTrimesterTabs();
@@ -2292,6 +2371,7 @@ async function switchTrimester(t) {
 }
 
 async function switchGroup(g) {
+  if (!appReady()) return; // ignore clicks until access is resolved and content is loaded
   currentGroup = (g === 'all') ? 'all' : parseInt(g);
   WORDS = wordsForGroup(currentSubject, currentContentType, currentTrimester, currentGroup);
   renderDynGroupBtns();
@@ -2447,14 +2527,18 @@ function computeStreak(snapshotRows) {
 }
 
 
+let dashSeq = 0;
 async function refreshDash() {
-  const liveMastery = await fetchLiveMastery(WORDS.map(w => w.id));
-  const { overall, mastered, dotColors } = computeMasteryStats(WORDS, liveMastery);
+  if (!currentUser) return;
+  const seq = ++dashSeq, epoch = AUTH_EPOCH, words = WORDS; // snapshot: results must match what was requested
+  const liveMastery = await fetchLiveMastery(words.map(w => w.id));
+  if (seq !== dashSeq || epoch !== AUTH_EPOCH) return; // a newer refresh or an account change superseded this one
+  const { overall, mastered, dotColors } = computeMasteryStats(words, liveMastery);
   document.getElementById('dash-overall').textContent = overall+'%';
-  document.getElementById('dash-mastered').innerHTML = mastered+' <small>/ '+WORDS.length+'</small>';
+  document.getElementById('dash-mastered').innerHTML = mastered+' <small>/ '+words.length+'</small>';
   setBar('dash-bar', overall); updatePills(overall);
   const dots = document.getElementById('dash-dots'); dots.innerHTML = '';
-  WORDS.forEach((w, i) => {
+  words.forEach((w, i) => {
     const d = document.createElement('div'); d.className = 'dot'; d.title = w.term; d.style.background = dotColors[i]; dots.appendChild(d);
   });
   document.getElementById('dash-sessions').textContent = (progress.sessions||0) ? `${progress.sessions} جلسة مكتملة` : 'ابدأ أول اختبار!';
@@ -2892,6 +2976,7 @@ async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
 
 // ── REVIEW HUB (Phase 6) ──
 async function openReviewHub() {
+  if (!appReady()) return; // no plan/review entry until access is resolved and content is loaded
   showPage('review-hub');
   await loadWordsFromDB();
   await refreshPlanStatus(); // populates currentPlan — needed before reconciliation below
@@ -3413,8 +3498,8 @@ async function loadPlanOverview(plan) {
 // ══════════════════════════════════════
 //  MEMORIZATION PLAN — setup UI
 // ══════════════════════════════════════
-function startCreatePlan() { editingPlanId = null; showPage('plan-setup'); renderPlanSetup(); }
-function startEditPlan() { if (!currentPlan) return; editingPlanId = currentPlan.id; showPage('plan-setup'); renderPlanSetup(); }
+function startCreatePlan() { if (!appReady()) return; editingPlanId = null; showPage('plan-setup'); renderPlanSetup(); }
+function startEditPlan() { if (!appReady() || !currentPlan) return; editingPlanId = currentPlan.id; showPage('plan-setup'); renderPlanSetup(); }
 
 async function renderPlanSetup() {
   await loadWordsFromDB();
@@ -5353,6 +5438,11 @@ async function refreshPushUI() {
 // the token from the URL — takes priority over the normal session check below.
 let inPasswordRecovery = false;
 db.auth.onAuthStateChange((event, session) => {
+  // Session ended (expiry, failed refresh, or sign-out in another tab): drop the account's content
+  // and return to login. Idempotent with handleLogout. No async Supabase calls inside this callback.
+  if (event === 'SIGNED_OUT' && currentUser) {
+    AUTH_EPOCH++; resetUserScopedState(); currentUser = null; resetAuthForms(); showPage('auth');
+  }
   if (event === 'PASSWORD_RECOVERY') {
     inPasswordRecovery = true;
     document.getElementById('reset-error').style.display = 'none';
