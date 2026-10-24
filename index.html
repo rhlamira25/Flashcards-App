@@ -1883,9 +1883,35 @@ async function checkUserAccess(user) {
   await initApp();
 }
 
+// Clears every field on the login and signup forms so nothing typed in an earlier
+// session is still visible to the next person who uses this device.
+function resetAuthForms() {
+  ['login-email','login-password','signup-firstname','signup-lastname','signup-email',
+   'signup-password','signup-password2','signup-dob','forgot-email'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.value = ''; if (el.type === 'text' && el.dataset.wasPassword) el.type = 'password'; }
+  });
+  // Password fields that were toggled to visible go back to hidden.
+  ['login-password','signup-password','signup-password2'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.type = 'password';
+  });
+  document.querySelectorAll('.pw-toggle').forEach(b => { b.textContent = '👁️'; });
+  document.querySelectorAll('input[name="signup-student-type"]').forEach(r => { r.checked = false; });
+  document.querySelectorAll('[id^="signup-type-label-"]').forEach(l => { l.style.borderColor = 'var(--input-border)'; });
+  selectedSignupStudentType = null;
+  const cl = document.getElementById('signup-password-checklist');
+  if (cl) cl.innerHTML = '';
+  updateSignupBtnState();
+  const btn = document.getElementById('signup-btn');
+  if (btn) btn.textContent = 'إنشاء حساب ←';
+  switchTab('login');
+}
+
 async function handleLogout() {
   await db.auth.signOut();
   currentUser = null;
+  resetAuthForms();
   showPage('auth');
 }
 
