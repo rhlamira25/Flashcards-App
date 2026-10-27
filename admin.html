@@ -1619,10 +1619,10 @@ async function rejectVariant(id) {
 let allContentWords = [];
 let editingWordId = null;
 
-// content_type options differ per subject — history: term/date/personality, geography: term/map.
+// content_type options differ per subject — history: term/date/personality/map, geography: term/map.
 // "map" has no special UI/interaction yet (still behaves like a plain term) — flagged for a future design pass.
 const CONTENT_TYPES_BY_SUBJECT = {
-  history: [ { value: 'term', label: '🔤 مصطلح' }, { value: 'date', label: '📅 تاريخ/حدث' }, { value: 'personality', label: '👤 شخصية' } ],
+  history: [ { value: 'term', label: '🔤 مصطلح' }, { value: 'date', label: '📅 تاريخ/حدث' }, { value: 'personality', label: '👤 شخصية' }, { value: 'map', label: '🗺️ خريطة' } ],
   geography: [ { value: 'term', label: '🔤 مصطلح' }, { value: 'map', label: '🗺️ خريطة' } ]
 };
 
