@@ -1087,8 +1087,13 @@ const SUPABASE_URL = 'https://fakoavxxabsatafwllxo.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_l3wn00JL3rmmJcZtnOrNTw_SV7qrKTM';
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// ADMIN EMAIL — change this to your email
-const ADMIN_EMAIL = 'amirarahal2001@gmail.com';
+// SECURITY: admin rights are decided by the DATABASE (private app_admins table via the app_is_admin() RPC) and
+// enforced again by RLS and by every admin-only function. This client-side check only decides which screen to show;
+// it grants nothing by itself.
+async function checkIsAdmin() {
+  const { data, error } = await db.rpc('app_is_admin');
+  return !error && data === true;
+}
 
 let currentAdmin = null;
 let selectedUserEmail = null;
@@ -1137,7 +1142,7 @@ async function adminLogin() {
   btn.disabled = true; btn.textContent = '...جاري التحقق';
   const { data, error } = await db.auth.signInWithPassword({ email, password });
   btn.disabled = false; btn.textContent = 'دخول ←';
-  if (error || data.user.email !== ADMIN_EMAIL) {
+  if (error || !(await checkIsAdmin())) {
     const el = document.getElementById('auth-error');
     el.textContent = 'غير مصرح لك بالدخول'; el.style.display = 'block';
     await db.auth.signOut(); return;
@@ -1984,7 +1989,7 @@ function closeCompModal() {
 // ── INIT ──
 (async function() {
   const { data: { session } } = await db.auth.getSession();
-  if (session?.user?.email === ADMIN_EMAIL) {
+  if (session?.user && await checkIsAdmin()) {
     currentAdmin = session.user;
     loadDashboard();
   } else {

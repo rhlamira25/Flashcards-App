@@ -2897,7 +2897,7 @@ async function logUnknownVariant(wordId, rawAnswer, normalizedAnswer) {
 // the just-submitted answer is already persisted per-word and its exact row is known; review/plan
 // answers still wait for the admin's manual decision to be retroactively corrected.
 async function triggerAiJudgment(variantRow, wordId, applyCtx) {
-  if (!variantRow || variantRow.ai_checked_at) return; // already judged once — don't re-spend a Gemini call on a repeat
+  if (!variantRow || !variantRow.id || variantRow.ai_checked_at) return; // already judged once — don't re-spend a Gemini call on a repeat
   try {
     const { data: { session } } = await db.auth.getSession();
     if (!session) return;
@@ -2912,21 +2912,14 @@ async function triggerAiJudgment(variantRow, wordId, applyCtx) {
     // ai_verdict/ai_reasoning/ai_word_pairs directly (via the service-role key) — the client
     // never supplies judgment content and never writes unknown_variants at all.
 
-    if (!applyCtx) return; // holistic-only or non-casual context — leave scoring to the admin's eventual decision
-    const score = typeof result.score === 'number' ? result.score : (result.verdict === 'accept' ? 100 : null);
-    if (score === null) return; // 'reject'/'uncertain' with no numeric score — keep the original raw fuzzy score as-is
+    if (!applyCtx || !applyCtx.answerRowId) return; // holistic-only or non-casual context: leave scoring to the admin's eventual decision
+    if (result.alreadyJudged) return; // only a fresh judgment adjusts the score (unchanged behaviour)
 
-    if (applyCtx.answerRowId) {
-      // Server recomputes real_level/interval/next_review_at from the corrected score
-      // (mirrors persist_answer_and_progress exactly) and recalculates Revision
-      // workload -- see correct_answer_score_and_progress. This replaces the previous
-      // raw concept_progress UPDATE, which wrote client-computed proficiency directly
-      // (a Part A §2.2 violation) and never touched next_review_at/current_interval,
-      // leaving scheduling stale after an AI-corrected variant judgment.
-      await dbWrite(db.rpc('correct_answer_score_and_progress', {
-        p_answer_id: applyCtx.answerRowId, p_new_score: score
-      }), { context: 'triggerAiJudgment correct score+progress', silent: true });
-    }
+    // SECURITY: the browser no longer sends any score. The Edge Function stored its verdict score in
+    // unknown_variants.ai_score (service-role write); apply_ai_judgment reads THAT value and applies it
+    // only to the caller's own 'unknown' answer, recomputing level / next_review_at / interval server-side.
+    await dbWrite(db.rpc('apply_ai_judgment', { p_answer_id: applyCtx.answerRowId }),
+      { context: 'triggerAiJudgment apply trusted judgment', silent: true });
   } catch (e) { console.error('triggerAiJudgment failed:', e); }
 }
 
@@ -2956,6 +2949,8 @@ async function persistOneCasualAnswer(testId, a) {
 }
 
 async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
+  // Returns the new test id (truthy) ONLY if the test and EVERY answer were stored; otherwise false.
+  // The server scores each answer itself (client score/match values are ignored) and derives overall_score.
   try {
     const { data: testId, error: testErr } = await db.rpc('create_rewrite_test', {
       p_subject: subject, p_group_number: groupNumber === 'all' ? null : groupNumber,
@@ -2964,13 +2959,17 @@ async function persistRewriteTest(subject, groupNumber, answers, overallScore) {
     });
     if (testErr || !testId) { console.error('persistRewriteTest create_rewrite_test failed:', testErr); return false; }
 
+    let failed = 0;
     for (const a of answers) {
-      await dbWrite(db.rpc('persist_answer_and_progress', {
+      const { error } = await dbWrite(db.rpc('persist_answer_and_progress', {
         p_test_id: testId, p_word_id: a.word.id, p_raw_answer: a.raw, p_normalized_answer: a.match.normalizedStudent,
         p_match_type: a.match.matchType, p_similarity: a.match.similarity, p_score: a.match.score
-      }), { context: 'persistRewriteTest answer+progress', silent: true }); // batch loop — one toast per test, not per word
+      }), { context: 'persistRewriteTest answer+progress', silent: true }); // batch loop: one toast per test, not per word
+      if (error) failed++;
     }
-    return true;
+    if (failed > 0) { console.error('persistRewriteTest: ' + failed + ' answer(s) failed to persist'); return false; }
+    await dbWrite(db.rpc('finalize_rewrite_test', { p_test_id: testId }), { context: 'persistRewriteTest finalize', silent: true });
+    return testId;
   } catch (e) { console.error('persistRewriteTest failed:', e); return false; }
 }
 
@@ -3332,14 +3331,15 @@ async function refreshPlanStatus() {
     learnBtn.style.display = 'none';
     infoLine.textContent = `🎉 أنهيت كل المصطلحات الجديدة في هذه الخطة (${learnedCount}/${totalCount}) — بقيت المراجعات فقط`;
     if (plan.status === 'active') {
-      const { error: completeErr } = await dbWrite(db.from('study_plans').update({ status: 'completed', memorisation_completed_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq('id', plan.id), { context: 'auto-complete plan', silent: true });
+      // Server verifies no pending concept remains before flipping the plan to 'completed'.
+      const { data: completeRes, error: completeErr } = await dbWrite(db.rpc('complete_plan_if_finished', { p_plan_id: plan.id }), { context: 'auto-complete plan', silent: true });
       // This block only ever runs once per plan -- plan.status flips to 'completed' in the
       // DB the moment this succeeds, so refreshPlanStatus's own fetch above will never see
       // status:'active' for this plan again. That's exactly the "exact moment of transition"
       // signal needed for a one-time popup, with no extra tracking required beyond this guard.
-      if (!completeErr && !plan.completion_popup_shown) {
+      if (!completeErr && completeRes && completeRes.completed && !plan.completion_popup_shown) {
         await showCompletionPopup({ ...plan, status: 'completed' });
-        await dbWrite(db.from('study_plans').update({ completion_popup_shown: true }).eq('id', plan.id), { context: 'mark completion popup shown', silent: true });
+        await dbWrite(db.rpc('mark_completion_popup_shown', { p_plan_id: plan.id }), { context: 'mark completion popup shown', silent: true });
       }
     }
   } else {
@@ -3954,14 +3954,9 @@ async function triggerComponentGeneration(wordIds) {
 // Pauses/unpauses concept_progress rows so the due-review queue can reflect the
 // student's choice to focus solely on the active plan's scope (or not).
 async function applyPauseState(scopeWordIds, pauseOthers) {
-  if (pauseOthers && scopeWordIds.length > 0) {
-    await dbWrite(db.from('concept_progress').update({ is_paused: true })
-      .eq('user_id', currentUser.id).not('word_id', 'in', `(${scopeWordIds.join(',')})`), { context: 'applyPauseState pause others' });
-    await dbWrite(db.from('concept_progress').update({ is_paused: false })
-      .eq('user_id', currentUser.id).in('word_id', scopeWordIds), { context: 'applyPauseState unpause scope' });
-  } else {
-    await dbWrite(db.from('concept_progress').update({ is_paused: false }).eq('user_id', currentUser.id), { context: 'applyPauseState unpause all' });
-  }
+  // One atomic server-side operation (concept_progress is no longer writable by the browser).
+  await dbWrite(db.rpc('set_review_pause', { p_scope_word_ids: scopeWordIds || [], p_pause_others: !!pauseOthers }),
+    { context: 'applyPauseState' });
 }
 
 // ── EDIT PLAN (§54) — recalculate schedule; student chooses whether to keep already-learned progress ──
@@ -4109,18 +4104,12 @@ async function acceptOutsideActivity() {
   outsideActivityWordIds = [];
   document.getElementById('outside-activity-overlay').classList.remove('active');
   if (!currentPlan) return;
-  if (acceptIds.length) {
-    const { error } = await db.from('plan_concepts').update({ status: 'learned', learned_at: new Date().toISOString() })
-      .eq('plan_id', currentPlan.id).in('word_id', acceptIds);
+  if (acceptIds.length || declineIds.length) {
+    // Server validates plan ownership, that accepted words are PENDING plan members with real test
+    // progress, and records declines -- all in one atomic call.
+    const { error } = await dbWrite(db.rpc('accept_outside_activity', { p_plan_id: currentPlan.id, p_accept_ids: acceptIds, p_decline_ids: declineIds }),
+      { context: 'acceptOutsideActivity', silent: true });
     if (error) { console.error('acceptOutsideActivity failed:', error); alert('تعذّر اعتماد النتائج، حاول مرة أخرى.'); return; }
-  }
-  if (declineIds.length) {
-    // Unchecked + confirmed = permanent decline for these specific words, so they stop
-    // resurfacing in this popup. Unlike "ignore now" (which decides nothing), this is a
-    // deliberate per-word choice, so it's the one case that DOES need to persist.
-    const { error } = await db.from('plan_concepts').update({ outside_activity_declined: true })
-      .eq('plan_id', currentPlan.id).in('word_id', declineIds);
-    if (error) console.error('acceptOutsideActivity decline-flag failed:', error);
   }
   openReviewHub();
 }
@@ -4442,18 +4431,23 @@ async function revealGuidedAnswer() {
 
   // §12-13: component-level proficiency, complementing (not replacing) the
   // existing word-level concept_progress system.
-  persistComponentProgress(c.id, match.score);
+  persistComponentProgress(c.id, studentInput);
 }
 
-async function persistComponentProgress(componentId, score) {
+// SECURITY: the browser sends the student's ANSWER, never a score; the server scores it against the
+// component's trusted answer (same algorithm as the client display) and stores the result.
+async function persistComponentProgress(componentId, studentAnswer) {
   try {
-    const { data: existing } = await db.from('component_progress').select('id').eq('user_id', currentUser.id).eq('component_id', componentId);
-    if (existing && existing.length) {
-      await dbWrite(db.from('component_progress').update({ current_proficiency: score, last_tested_at: new Date().toISOString() }).eq('id', existing[0].id), { context: 'persistComponentProgress update', silent: true });
-    } else {
-      await dbWrite(db.from('component_progress').insert({ user_id: currentUser.id, component_id: componentId, current_proficiency: score, last_tested_at: new Date().toISOString() }), { context: 'persistComponentProgress insert', silent: true });
-    }
+    await dbWrite(db.rpc('persist_component_progress', { p_component_id: componentId, p_student_answer: studentAnswer || '' }),
+      { context: 'persistComponentProgress', silent: true });
   } catch (e) { console.error('persistComponentProgress failed:', e); }
+}
+// Multiple-choice variant: the browser sends the SELECTED OPTION TEXT; the server decides correct (100) / wrong (0).
+async function persistComponentQuizChoice(componentId, selectedText) {
+  try {
+    await dbWrite(db.rpc('persist_component_qcm', { p_component_id: componentId, p_selected_option: selectedText || '' }),
+      { context: 'persistComponentQuizChoice', silent: true });
+  } catch (e) { console.error('persistComponentQuizChoice failed:', e); }
 }
 
 function guidedNextQuestion() {
@@ -4588,7 +4582,7 @@ function renderComponentQuiz() {
         if (b.textContent === options.find(o => o.correct).text) b.classList.add('correct');
       });
       if (!opt.correct) btn.classList.add('wrong'); else cqScore++;
-      persistComponentProgress(q.component.id, opt.correct ? 100 : 0);
+      persistComponentQuizChoice(q.component.id, opt.text);
       document.getElementById('cq-next-btn').textContent = (cqIdx+1 < cqQuestions.length) ? 'التالي ▶' : 'النتائج ✓';
       document.getElementById('cq-nav').style.display = 'flex';
     };
@@ -5146,6 +5140,7 @@ async function persistSecondChanceRetest(answers, initialScores) {
         }), { context: 'persistSecondChanceRetest answer+progress', silent: true });
       }
     }
+    if (testId) await dbWrite(db.rpc('finalize_rewrite_test', { p_test_id: testId }), { context: 'persistSecondChanceRetest finalize', silent: true });
   } catch (e) { console.error('persistSecondChanceRetest failed:', e); }
 }
 
@@ -5220,12 +5215,14 @@ async function nextRW() {
     return;
   }
   if (isPlanLearnSession) {
-    const testOk = await persistRewriteTest('plan', null, rwAnswers, avgScore);
+    const planTestId = await persistRewriteTest('plan', null, rwAnswers, avgScore);
+    const testOk = !!planTestId;
     let markedLearnedOk = false;
     if (testOk && currentPlan) {
       const wordIds = rwAnswers.map(a => a.word.id);
-      const { error: markErr } = await db.from('plan_concepts').update({ status: 'learned', learned_at: new Date().toISOString() })
-        .eq('plan_id', currentPlan.id).in('word_id', wordIds);
+      // Server marks learned ONLY words that belong to this plan AND have a stored answer in this test.
+      const { error: markErr } = await dbWrite(db.rpc('mark_plan_concepts_learned', { p_plan_id: currentPlan.id, p_test_id: planTestId, p_word_ids: wordIds }),
+        { context: 'mark plan concepts learned', silent: true });
       markedLearnedOk = !markErr;
       if (markErr) console.error('Failed to mark plan_concepts as learned:', markErr);
     }
@@ -5254,7 +5251,7 @@ async function nextRW() {
   rwAnswers.forEach(a => { if (!progress.scores[a.word.id]) progress.scores[a.word.id]={qcm:null,rewrite:null}; progress.scores[a.word.id].rewrite=a.match.score; });
   progress.sessions++; saveProgress(); clearDraft('rewrite');
   if (currentCasualTestId) {
-    const { error: finalizeErr } = await db.from('rewrite_tests').update({ submitted_at: new Date().toISOString(), overall_score: avgScore }).eq('id', currentCasualTestId);
+    const { error: finalizeErr } = await dbWrite(db.rpc('finalize_rewrite_test', { p_test_id: currentCasualTestId }), { context: 'nextRW finalize casual test', silent: true });
     if (finalizeErr) console.error('nextRW finalize casual test failed:', finalizeErr);
   }
   currentCasualTestId = null;
