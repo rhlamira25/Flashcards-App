@@ -5222,11 +5222,50 @@ function ensureCaretVisible(input) {
   const viewH = input.clientHeight;
   if (caretTop < input.scrollTop) { const above = caretTop - parseFloat(cs.paddingTop); input.scrollTop = above < lineH ? 0 : above; } // first line → exactly the top, so nothing is clipped
   else if (caretBottom + parseFloat(cs.paddingBottom) > input.scrollTop + viewH) input.scrollTop = caretBottom + parseFloat(cs.paddingBottom) - viewH;
+}
+// Page-level reveal is ONLY for the OS keyboard (native mode) opening over the field. It is never used
+// per keystroke, and never with the custom keyboard (which is part of the page, so nothing covers the field).
+function kbRevealFieldInPage(input) {
   const vv = window.visualViewport;
   const vTop = vv ? vv.offsetTop : 0, vBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
   const r = input.getBoundingClientRect();
   if (r.top < vTop || r.bottom > vBottom) input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
+// ── Page-scroll guard ──
+// Browsers (notably Chrome on Android) may "reveal" the caret after a programmatic edit/selection change
+// by scrolling the page, often recentring it. For the custom keyboard that is unwanted: the page must stay
+// exactly where the student put it. Take a snapshot of every scrollable ancestor + the page before the edit,
+// restore it right after, and keep re-asserting it for a few frames (reveals can be scheduled after layout).
+// The snapshot is reused during rapid typing so a late reveal can't become the new baseline, and the guard
+// stands down the moment the student scrolls by hand (touchmove / wheel), so manual scrolling is never fought.
+let kbGuard = null, kbUserScrolling = false, kbUserScrollTimer = null;
+function kbScrollSnapshot(input) {
+  const snap = [];
+  for (let n = input.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+    if (n.scrollHeight > n.clientHeight || n.scrollWidth > n.clientWidth) snap.push([n, n.scrollTop, n.scrollLeft]);
+  }
+  const se = document.scrollingElement || document.documentElement;
+  snap.push([se, se.scrollTop, se.scrollLeft]);
+  return snap;
+}
+function kbScrollRestore(snap) {
+  snap.forEach(([n, top, left]) => { if (n.scrollTop !== top) n.scrollTop = top; if (n.scrollLeft !== left) n.scrollLeft = left; });
+}
+function kbGuardScroll(input, fn) {
+  const now = performance.now();
+  if (!kbGuard || now > kbGuard.until || kbUserScrolling) kbGuard = { snap: kbScrollSnapshot(input), until: 0 };
+  const g = kbGuard; g.until = now + 400;
+  try { fn(); } finally { kbScrollRestore(g.snap); }
+  let frames = 0;
+  const tick = () => { if (kbGuard !== g || kbUserScrolling) return; kbScrollRestore(g.snap); if (++frames < 10) requestAnimationFrame(tick); };
+  requestAnimationFrame(tick);
+}
+function kbNoteUserScroll() {
+  kbUserScrolling = true; kbGuard = null;
+  clearTimeout(kbUserScrollTimer); kbUserScrollTimer = setTimeout(() => { kbUserScrolling = false; }, 250);
+}
+window.addEventListener('touchmove', kbNoteUserScroll, { passive: true });
+window.addEventListener('wheel', kbNoteUserScroll, { passive: true });
 function kbSetCaret(input, a, b) {
   kbFocus(input);
   input.setSelectionRange(a, b === undefined ? a : b);
@@ -5235,6 +5274,9 @@ function kbSetCaret(input, a, b) {
 function kbInsert(char) {
   const input = rwInputEl();
   if (!input || input.disabled) return;
+  kbGuardScroll(input, () => kbInsertRaw(input, char));
+}
+function kbInsertRaw(input, char) {
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   input.setRangeText(char, start, end, 'end'); // replaces any selection, leaves caret right after the insert
@@ -5244,6 +5286,9 @@ function kbInsert(char) {
 function kbBackspace() {
   const input = rwInputEl();
   if (!input || input.disabled) return;
+  kbGuardScroll(input, () => kbBackspaceRaw(input));
+}
+function kbBackspaceRaw(input) {
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   if (start === end) {
@@ -5264,6 +5309,9 @@ function kbBackspace() {
 function kbMoveCaret(dir) {
   const input = rwInputEl();
   if (!input || input.disabled) return;
+  kbGuardScroll(input, () => kbMoveCaretRaw(input, dir));
+}
+function kbMoveCaretRaw(input, dir) {
   kbFocus(input);
   const len = input.value.length;
   if (dir === 'start') { kbSetCaret(input, 0); return; }
@@ -5325,8 +5373,13 @@ function applyKeyboardMode() {
   });
   // Keep the caret visible after any native caret move / selection change / viewport (keyboard) change.
   ['focus', 'click', 'keyup', 'select', 'input'].forEach(ev => input.addEventListener(ev, () => ensureCaretVisible(input)));
-  if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { if (document.activeElement === input) ensureCaretVisible(input); });
-  window.addEventListener('resize', () => { if (document.activeElement === input) ensureCaretVisible(input); });
+  const onViewportChange = () => {
+    if (document.activeElement !== input) return;
+    ensureCaretVisible(input);
+    if (useNativeKeyboard) kbRevealFieldInPage(input); // OS keyboard may now cover the field
+  };
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', onViewportChange);
+  window.addEventListener('resize', onViewportChange);
   // Pressing a key/toolbar button must not blur the textarea (blur hides the caret and selection handles
   // on iOS/Android and would drop the exact cursor position the student chose).
   const keepFocus = e => { if (e.target.closest('#custom-kb button')) e.preventDefault(); };
