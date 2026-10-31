@@ -797,6 +797,12 @@ button{-webkit-tap-highlight-color:transparent;}
   padding:10px;
   box-shadow:0 6px 20px var(--shadow);
 }
+.rw-textarea{caret-color:var(--accent);}
+.custom-kb button{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;}
+.kb-nav{display:flex;direction:ltr;gap:6px;margin-bottom:8px;}
+.kb-nav-btn{flex:1;min-height:44px;background:var(--input-bg);border:1px solid var(--input-border);color:var(--text);border-radius:10px;font-family:'Cairo',sans-serif;font-size:.8rem;cursor:pointer;touch-action:manipulation;}
+.kb-nav-btn:active{background:var(--surface-hover);}
+.kb-nav-arrow{flex:1.3;font-size:1.05rem;color:var(--accent);}
 .kb-tab,.kb-key{
   background:var(--input-bg);
   border-color:var(--input-border);
@@ -1313,6 +1319,12 @@ select.form-input{appearance:auto;}
       <button type="button" id="kb-native-toggle-btn" onclick="toggleNativeKeyboard()" style="background:none;border:none;color:var(--text-sub);font-size:0.72rem;cursor:pointer;text-decoration:underline;">⌨️ استخدام لوحة الجهاز</button>
     </div>
     <div class="custom-kb" id="custom-kb">
+      <div class="kb-nav" id="kb-nav" role="toolbar" aria-label="التنقل داخل النص">
+        <button type="button" class="kb-nav-btn" data-nav="end" aria-label="الانتقال إلى نهاية النص">نهاية</button>
+        <button type="button" class="kb-nav-btn kb-nav-arrow" data-nav="left" aria-label="تحريك المؤشر إلى اليسار">◀</button>
+        <button type="button" class="kb-nav-btn kb-nav-arrow" data-nav="right" aria-label="تحريك المؤشر إلى اليمين">▶</button>
+        <button type="button" class="kb-nav-btn" data-nav="start" aria-label="الانتقال إلى بداية النص">بداية</button>
+      </div>
       <div class="kb-tabs">
         <button type="button" class="kb-tab active" data-layout="ar" onclick="switchKbLayout('ar')">عربي</button>
         <button type="button" class="kb-tab" data-layout="fr" onclick="switchKbLayout('fr')">Latin</button>
@@ -5179,26 +5191,102 @@ function switchKbLayout(layout) {
   document.querySelectorAll('.kb-tab').forEach(t => t.classList.toggle('active', t.dataset.layout === layout));
   renderKbKeys();
 }
+// ── Writing-input editing helpers ──
+// While the custom keyboard is active the textarea stays a normal, focusable, EDITABLE field but is
+// told not to raise the OS keyboard (inputmode="none"). It used to be readOnly, which is what broke
+// correction: read-only fields don't show a caret, and iOS/Android don't reliably honour a tap to
+// place the cursor or show selection handles/clipboard menu in them. With inputmode="none" the
+// browser keeps tap-to-position, long-press selection and copy/cut/paste, and only typing is routed
+// through our keys (OS typing is blocked below, so nothing can reach the OS predictive engine).
+function rwInputEl() { return document.getElementById('rw-input'); }
+function kbFocus(input) { try { input.focus({ preventScroll: true }); } catch { input.focus(); } }
+
+// Keeps the caret inside the textarea's visible area (programmatic selection changes don't scroll it,
+// especially on iOS), then makes sure the textarea itself is on screen above the keyboard/viewport edge.
+const KB_MIRROR_PROPS = ['direction','boxSizing','fontFamily','fontSize','fontWeight','fontStyle','letterSpacing','lineHeight','textTransform','textIndent','wordSpacing','tabSize','paddingTop','paddingRight','paddingBottom','paddingLeft','borderTopWidth','borderRightWidth','borderBottomWidth','borderLeftWidth','textAlign'];
+function ensureCaretVisible(input) {
+  if (!input) return;
+  const pos = input.selectionEnd ?? input.value.length;
+  const cs = getComputedStyle(input);
+  const mirror = document.createElement('div');
+  KB_MIRROR_PROPS.forEach(p => { mirror.style[p] = cs[p]; });
+  mirror.style.cssText += ';position:absolute;visibility:hidden;top:0;left:-9999px;white-space:pre-wrap;overflow-wrap:break-word;word-break:normal;height:auto;';
+  mirror.style.width = input.clientWidth + parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth) + 'px';
+  mirror.textContent = input.value.slice(0, pos);
+  const marker = document.createElement('span'); marker.textContent = '\u200b'; mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  const lineH = parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) * 1.6);
+  const top = marker.offsetTop; // measured from the mirror's padding edge, same origin as the textarea's scrollTop
+  document.body.removeChild(mirror);
+  const caretTop = top, caretBottom = top + lineH;
+  const viewH = input.clientHeight;
+  if (caretTop < input.scrollTop) { const above = caretTop - parseFloat(cs.paddingTop); input.scrollTop = above < lineH ? 0 : above; } // first line → exactly the top, so nothing is clipped
+  else if (caretBottom + parseFloat(cs.paddingBottom) > input.scrollTop + viewH) input.scrollTop = caretBottom + parseFloat(cs.paddingBottom) - viewH;
+  const vv = window.visualViewport;
+  const vTop = vv ? vv.offsetTop : 0, vBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  const r = input.getBoundingClientRect();
+  if (r.top < vTop || r.bottom > vBottom) input.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+function kbSetCaret(input, a, b) {
+  kbFocus(input);
+  input.setSelectionRange(a, b === undefined ? a : b);
+  ensureCaretVisible(input);
+}
 function kbInsert(char) {
-  const input = document.getElementById('rw-input');
+  const input = rwInputEl();
+  if (!input || input.disabled) return;
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
-  input.value = input.value.slice(0, start) + char + input.value.slice(end);
-  const pos = start + char.length;
-  input.focus(); input.setSelectionRange(pos, pos);
+  input.setRangeText(char, start, end, 'end'); // replaces any selection, leaves caret right after the insert
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  kbSetCaret(input, start + char.length);
 }
 function kbBackspace() {
-  const input = document.getElementById('rw-input');
+  const input = rwInputEl();
+  if (!input || input.disabled) return;
   const start = input.selectionStart ?? input.value.length;
   const end = input.selectionEnd ?? input.value.length;
   if (start === end) {
-    if (start === 0) return;
-    input.value = input.value.slice(0, start - 1) + input.value.slice(end);
-    input.focus(); input.setSelectionRange(start - 1, start - 1);
+    if (start === 0) { kbFocus(input); return; }
+    input.setRangeText('', start - 1, end, 'end');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    kbSetCaret(input, start - 1);
   } else {
-    input.value = input.value.slice(0, start) + input.value.slice(end);
-    input.focus(); input.setSelectionRange(start, start);
+    input.setRangeText('', start, end, 'end');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    kbSetCaret(input, start);
   }
+}
+// Cursor navigation. 'left'/'right' are VISUAL (what the student sees on screen, including mixed
+// Arabic/Latin runs) via Selection.modify where the browser supports it; otherwise they fall back to
+// logical movement for the textarea's right-to-left base direction (left = toward end of text).
+// 'start'/'end' jump to the first/last character of the answer.
+function kbMoveCaret(dir) {
+  const input = rwInputEl();
+  if (!input || input.disabled) return;
+  kbFocus(input);
+  const len = input.value.length;
+  if (dir === 'start') { kbSetCaret(input, 0); return; }
+  if (dir === 'end') { kbSetCaret(input, len); return; }
+  const s0 = input.selectionStart ?? len, e0 = input.selectionEnd ?? len;
+  let moved = false;
+  const sel = window.getSelection && window.getSelection();
+  if (sel && typeof sel.modify === 'function' && document.activeElement === input) {
+    try {
+      sel.modify('move', dir, 'character');
+      const s1 = input.selectionStart, e1 = input.selectionEnd;
+      moved = (s1 !== s0 || e1 !== e0) || (s0 === e0 && (s0 === 0 || s0 === len));
+    } catch { moved = false; }
+  }
+  if (!moved) {
+    const rtl = getComputedStyle(input).direction === 'rtl';
+    const forward = (dir === 'left') === rtl; // RTL: left moves toward the end of the text
+    let p;
+    if (s0 !== e0) p = forward ? e0 : s0;      // a selection collapses to its edge first, like a real keyboard
+    else p = Math.min(len, Math.max(0, s0 + (forward ? 1 : -1)));
+    input.setSelectionRange(p, p);
+  }
+  ensureCaretVisible(input);
 }
 function kbEnterPressed() {
   const submitVisible = document.getElementById('rw-submit-nav').style.display !== 'none';
@@ -5206,18 +5294,59 @@ function kbEnterPressed() {
 }
 function toggleNativeKeyboard() { useNativeKeyboard = !useNativeKeyboard; applyKeyboardMode(); }
 function applyKeyboardMode() {
-  const input = document.getElementById('rw-input');
+  const input = rwInputEl();
   const kb = document.getElementById('custom-kb');
   const btn = document.getElementById('kb-native-toggle-btn');
   if (!input || !kb || !btn) return;
+  input.readOnly = false; // never read-only: the caret, tap-to-position, selection and clipboard must keep working
   if (useNativeKeyboard) {
-    input.readOnly = false; kb.style.display = 'none';
+    input.removeAttribute('inputmode'); kb.style.display = 'none';
     btn.textContent = '🔤 استخدام اللوحة المخصصة (لحماية الاختبار الأعمى)';
   } else {
-    input.readOnly = true; kb.style.display = 'block';
+    input.setAttribute('inputmode', 'none'); kb.style.display = 'block'; // suppress the OS keyboard, keep a real caret
     btn.textContent = '⌨️ استخدام لوحة الجهاز';
   }
 }
+
+// One-time wiring (listeners live on persistent elements, so no re-binding per question).
+(function wireWritingInput() {
+  const input = rwInputEl(), kb = document.getElementById('custom-kb');
+  if (!input || !kb) return;
+  // Custom keyboard mode: typing arrives only from our keys. Block OS/physical-keyboard text insertion
+  // (and its predictive/composition path) exactly as the old read-only field did, while still allowing
+  // delete, cut, paste, undo, selection and caret movement.
+  input.addEventListener('beforeinput', e => {
+    if (useNativeKeyboard || !e.cancelable) return;
+    if (/^insert(Text|CompositionText|ReplacementText|LineBreak|Paragraph|FromDrop)$/.test(e.inputType || '')) e.preventDefault();
+  });
+  input.addEventListener('keydown', e => {
+    if (useNativeKeyboard || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'Enter' || (e.key && e.key.length === 1)) e.preventDefault();
+  });
+  // Keep the caret visible after any native caret move / selection change / viewport (keyboard) change.
+  ['focus', 'click', 'keyup', 'select', 'input'].forEach(ev => input.addEventListener(ev, () => ensureCaretVisible(input)));
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { if (document.activeElement === input) ensureCaretVisible(input); });
+  window.addEventListener('resize', () => { if (document.activeElement === input) ensureCaretVisible(input); });
+  // Pressing a key/toolbar button must not blur the textarea (blur hides the caret and selection handles
+  // on iOS/Android and would drop the exact cursor position the student chose).
+  const keepFocus = e => { if (e.target.closest('#custom-kb button')) e.preventDefault(); };
+  kb.addEventListener('pointerdown', keepFocus);
+  kb.addEventListener('mousedown', keepFocus);
+  // Cursor toolbar: tap = one step, press-and-hold = repeat (so a long answer is crossable quickly).
+  let holdT = null, repT = null, pointerFired = false;
+  const stop = () => { clearTimeout(holdT); clearInterval(repT); holdT = repT = null; };
+  kb.querySelectorAll('.kb-nav-btn').forEach(b => {
+    const dir = b.dataset.nav, repeats = dir === 'left' || dir === 'right';
+    b.addEventListener('pointerdown', e => {
+      if (e.button !== undefined && e.button > 0) return;
+      pointerFired = true; kbMoveCaret(dir);
+      if (repeats) { stop(); holdT = setTimeout(() => { repT = setInterval(() => kbMoveCaret(dir), 55); }, 350); }
+    });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => b.addEventListener(ev, stop));
+    b.addEventListener('click', () => { if (pointerFired) { pointerFired = false; return; } kbMoveCaret(dir); }); // keyboard (Enter/Space) activation
+    b.addEventListener('contextmenu', e => e.preventDefault());
+  });
+})();
 renderKbKeys();
 
 function renderRW() {
