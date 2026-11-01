@@ -923,11 +923,19 @@ body {
           <option value="history">التاريخ</option>
           <option value="geography">الجغرافيا</option>
         </select>
-        <input type="text" id="comp-search" placeholder="🔍 ابحث عن مصطلح..." oninput="filterComponentWords(this.value)"
+        <select id="comp-ctype" onchange="applyCompFilters()" style="flex:1;padding:9px 12px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:10px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;">
+          <option value="all">كل الأنواع</option>
+          <option value="term">🔤 مصطلح</option>
+          <option value="personality">👤 شخصية</option>
+          <option value="date">📅 تاريخ/حدث</option>
+          <option value="map">🗺️ خريطة</option>
+        </select>
+        <input type="text" id="comp-search" placeholder="🔍 ابحث عن مصطلح أو شخصية..." oninput="applyCompFilters()"
           style="flex:2;padding:9px 12px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:10px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.85rem;outline:none;direction:rtl;">
       </div>
       <div style="font-size:0.72rem;color:var(--text-faint);margin-bottom:12px;line-height:1.6;">
-        هذه المكونات تُستخدم فقط ضمن خطة الحفظ (وليس البطاقات أو الاختبارات العادية). تُولَّد تلقائياً عند إنشاء خطة تتضمن المصطلح — يمكنك هنا مراجعتها أو تعديلها أو توليدها يدوياً.
+        هذه المكونات تُستخدم ضمن خطة الحفظ. تُولَّد تلقائياً عند إنشاء خطة تتضمن المصطلح — يمكنك هنا مراجعتها أو تعديلها أو توليدها يدوياً.<br>
+        👤 <strong>الشخصيات</strong>: كل شخصية لها مكونان أو ثلاثة بعناوين واضحة (مثل: من هو؟ ماذا فعل؟ بماذا اشتهر؟) ويمكنك إضافتها وتعديل عناوينها ومحتواها وحذفها وترتيبها. عند الحفظ يتحدّث التعريف الكامل للشخصية تلقائياً ليطابق المكونات.
       </div>
       <div id="comp-words-list"><div class="spinner"></div></div>
     </div>
@@ -1032,9 +1040,10 @@ body {
     <div class="modal-title" id="comp-modal-term"></div>
     <div class="modal-sub" id="comp-modal-definition" style="line-height:1.7;"></div>
 
+    <div id="comp-modal-note" style="display:none;margin-top:10px;font-size:0.74rem;line-height:1.7;color:var(--text-faint);background:var(--card-bg);border-radius:10px;padding:8px 10px;"></div>
     <div id="comp-list" style="margin-top:14px;"></div>
 
-    <button class="btn btn-ghost" onclick="addComponentRow()" style="width:100%;margin-top:8px;">➕ إضافة مكون</button>
+    <button class="btn btn-ghost" id="add-comp-btn" onclick="addComponentRow()" style="width:100%;margin-top:8px;">➕ إضافة مكون</button>
 
     <div class="modal-actions" style="margin-top:16px;flex-wrap:wrap;">
       <button class="btn btn-success" onclick="saveComponents()" id="save-comp-btn">💾 حفظ</button>
@@ -1775,10 +1784,15 @@ async function saveWord() {
     const { error } = await dbWrite(db.from('words').update(wordData).eq('id', editingWordId), { context: 'saveWord update', message: 'تعذّر حفظ التعديلات، حاول مرة أخرى.' });
     if (error) { btn.disabled = false; return; }
     showToast('✅ تم تعديل المصطلح بنجاح!');
+    if (wordData.content_type === 'personality') {
+      const { count } = await db.from('word_components').select('id', { count: 'exact', head: true }).eq('word_id', editingWordId);
+      if (count > 0) setTimeout(() => showToast('ℹ️ هذه الشخصية مقسَّمة إلى مكونات — حدّثها من تبويب «المكونات» ليبقى التعريف متطابقاً'), 1800);
+    }
   } else {
     const { error } = await dbWrite(db.from('words').insert(wordData), { context: 'saveWord insert', message: 'تعذّر إضافة المصطلح، حاول مرة أخرى.' });
     if (error) { btn.disabled = false; return; }
     showToast('✅ تم إضافة المصطلح بنجاح!');
+    if (wordData.content_type === 'personality') setTimeout(() => showToast('ℹ️ أضف لهذه الشخصية مكونين أو ثلاثة من تبويب «المكونات»'), 1800);
   }
 
   btn.disabled = false;
@@ -1828,11 +1842,20 @@ const SEMANTIC_ROLE_LABELS = {
   what: 'ما هي؟ (تعريف)', target: 'ضد ماذا؟ (هدف)', method: 'كيف؟ (طريقة)',
   purpose: 'لماذا؟ (غرض)', time_place: 'متى/أين؟', other: 'أخرى'
 };
+// Personalities use the SAME role keys (so colours, distractor pools and the RPC stay shared) with labels that fit people.
+const PERSONALITY_ROLE_LABELS = {
+  what: 'من هو؟ (هوية/منصب)', method: 'ماذا فعل؟ (دور/أعمال)', purpose: 'بماذا اشتهر؟ (أهمية)',
+  other: 'ماذا شهد عهده؟ (أحداث)', time_place: 'متى/كيف انتهت حياته؟', target: 'موقف/هدف'
+};
+const PERSONALITY_DEFAULT_ROLES = ['what', 'method', 'purpose'];
+const ROLE_TO_COLOR = { what: 'blue', target: 'yellow', method: 'green', purpose: 'purple', time_place: 'orange', other: 'orange' };
+const CONTENT_TYPE_LABELS_ADMIN = { term: '🔤 مصطلح', personality: '👤 شخصية', date: '📅 تاريخ/حدث', map: '🗺️ خريطة' };
+let currentCompIsPersonality = false;
 const COLOR_ROLE_HEX = { blue: '#5b8def', yellow: '#e0b23d', green: '#4aaa70', purple: '#a06cd5', orange: '#e0793d' };
 
 async function loadComponentWords() {
   const subject = document.getElementById('comp-subject').value;
-  const { data: words } = await db.from('words').select('id, term, definition, group_number, group_name').eq('subject', subject).order('group_number').order('id');
+  const { data: words } = await db.from('words').select('id, term, definition, group_number, group_name, content_type').eq('subject', subject).order('group_number').order('id');
   allCompWords = words || [];
 
   const wordIds = allCompWords.map(w => w.id);
@@ -1841,14 +1864,19 @@ async function loadComponentWords() {
     const { data: comps } = await db.from('word_components').select('word_id').in('word_id', wordIds);
     (comps || []).forEach(c => { compWordCounts[c.word_id] = (compWordCounts[c.word_id] || 0) + 1; });
   }
-  renderComponentWords(allCompWords);
+  applyCompFilters();
 }
 
-function filterComponentWords(query) {
-  if (!query.trim()) { renderComponentWords(allCompWords); return; }
-  const filtered = allCompWords.filter(w => w.term.includes(query) || w.definition.includes(query));
-  renderComponentWords(filtered);
+// Content-type filter + free-text search, applied together.
+function applyCompFilters() {
+  const ctype = document.getElementById('comp-ctype')?.value || 'all';
+  const query = (document.getElementById('comp-search')?.value || '').trim();
+  let list = allCompWords;
+  if (ctype !== 'all') list = list.filter(w => (w.content_type || 'term') === ctype);
+  if (query) list = list.filter(w => w.term.includes(query) || w.definition.includes(query));
+  renderComponentWords(list);
 }
+function filterComponentWords() { applyCompFilters(); }
 
 function renderComponentWords(words) {
   const list = document.getElementById('comp-words-list');
@@ -1858,13 +1886,17 @@ function renderComponentWords(words) {
   }
   list.innerHTML = words.map(w => {
     const count = compWordCounts[w.id] || 0;
-    const badge = count > 0
+    const isPers = w.content_type === 'personality';
+    const typeChip = `<span style="font-size:0.64rem;color:var(--text-faint);margin-inline-start:6px;">${CONTENT_TYPE_LABELS_ADMIN[w.content_type] || ''}</span>`;
+    const badge = (isPers && count > 0 && (count < 2 || count > 3))
+      ? `<span style="font-size:0.68rem;background:rgba(224,121,61,0.18);color:#e0793d;border-radius:8px;padding:2px 8px;">⚠️ ${count} (المطلوب 2–3)</span>`
+      : count > 0
       ? `<span style="font-size:0.68rem;background:rgba(74,170,112,0.15);color:var(--correct-text,#4aaa70);border-radius:8px;padding:2px 8px;">🧩 ${count}</span>`
       : `<span style="font-size:0.68rem;background:rgba(255,255,255,0.06);color:var(--text-faint);border-radius:8px;padding:2px 8px;">لم تُولَّد بعد</span>`;
     return `
       <div onclick="openComponentsEditor(${w.id})" style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:var(--card-bg);border-radius:10px;margin-bottom:6px;gap:8px;cursor:pointer;">
         <div style="flex:1;min-width:0;">
-          <div style="font-weight:700;color:var(--text);font-size:0.83rem;">${w.term}</div>
+          <div style="font-weight:700;color:var(--text);font-size:0.83rem;">${w.term}${typeChip}</div>
           <div style="font-size:0.72rem;color:var(--text-faint);margin-top:2px;">${w.group_name || ''}</div>
         </div>
         ${badge}
@@ -1876,12 +1908,17 @@ async function openComponentsEditor(wordId) {
   const word = allCompWords.find(w => w.id === wordId);
   if (!word) return;
   currentCompWordId = wordId;
+  currentCompIsPersonality = word.content_type === 'personality';
 
   const { data: comps } = await db.from('word_components').select('*').eq('word_id', wordId).order('order_index');
   compRows = (comps || []).map(c => ({ ...c })); // working copy
 
   document.getElementById('comp-modal-term').textContent = word.term;
   document.getElementById('comp-modal-definition').textContent = word.definition;
+  const note = document.getElementById('comp-modal-note');
+  note.style.display = currentCompIsPersonality ? 'block' : 'none';
+  note.textContent = currentCompIsPersonality ? '👤 تُقسَّم الشخصية إلى مكونين أو ثلاثة بعناوين واضحة (مثل: من هو؟ / ماذا فعل؟ / بماذا اشتهر؟). عند الحفظ يُحدَّث التعريف الكامل للشخصية تلقائياً من المكونات بالترتيب الظاهر هنا.' : '';
+  document.getElementById('regen-comp-btn').style.display = currentCompIsPersonality ? 'none' : ''; // AI decomposition is for concepts only
   renderCompRows();
   document.getElementById('comp-modal').classList.add('active');
 }
@@ -1889,25 +1926,39 @@ async function openComponentsEditor(wordId) {
 function renderCompRows() {
   const container = document.getElementById('comp-list');
   if (!compRows.length) {
-    container.innerHTML = '<div style="font-size:0.78rem;color:var(--text-faint);padding:8px 0;">لا توجد مكونات بعد — يمكنك التوليد بالذكاء الاصطناعي أو الإضافة يدوياً.</div>';
+    container.innerHTML = currentCompIsPersonality
+      ? '<div style="font-size:0.78rem;color:var(--text-faint);padding:8px 0;">لا توجد مكونات بعد — أضف مكونين أو ثلاثة يدوياً.</div>'
+      : '<div style="font-size:0.78rem;color:var(--text-faint);padding:8px 0;">لا توجد مكونات بعد — يمكنك التوليد بالذكاء الاصطناعي أو الإضافة يدوياً.</div>';
+    updateAddCompBtn();
     return;
   }
+  const roleLabels = currentCompIsPersonality ? PERSONALITY_ROLE_LABELS : SEMANTIC_ROLE_LABELS;
   container.innerHTML = compRows.map((c, i) => `
     <div style="border-inline-start:3px solid ${COLOR_ROLE_HEX[c.color_role] || '#888'};background:var(--card-bg);border-radius:10px;padding:10px 12px;margin-bottom:8px;">
       <div style="display:flex;gap:6px;margin-bottom:6px;">
         <select onchange="updateCompField(${i}, 'semantic_role', this.value); updateCompField(${i}, 'color_role', {what:'blue',target:'yellow',method:'green',purpose:'purple',time_place:'orange',other:'orange'}[this.value])" style="flex:1;padding:6px 8px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.76rem;">
-          ${Object.entries(SEMANTIC_ROLE_LABELS).map(([k,v]) => `<option value="${k}" ${c.semantic_role===k?'selected':''}>${v}</option>`).join('')}
+          ${Object.entries(roleLabels).map(([k,v]) => `<option value="${k}" ${c.semantic_role===k?'selected':''}>${v}</option>`).join('')}
         </select>
         <button class="btn btn-ghost btn-sm" onclick="moveCompRow(${i},-1)" ${i===0?'disabled':''}>▲</button>
         <button class="btn btn-ghost btn-sm" onclick="moveCompRow(${i},1)" ${i===compRows.length-1?'disabled':''}>▼</button>
         <button class="btn btn-danger btn-sm" onclick="removeCompRow(${i})">🗑️</button>
       </div>
-      <input type="text" value="${escapeHtml(c.question||'')}" oninput="updateCompField(${i},'question',this.value)" placeholder="السؤال"
+      <input type="text" value="${escapeHtml(c.question||'')}" oninput="updateCompField(${i},'question',this.value)" placeholder="${currentCompIsPersonality ? 'عنوان المكوّن (مثال: من هو؟)' : 'السؤال'}"
         style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.8rem;margin-bottom:6px;direction:rtl;">
-      <textarea oninput="updateCompField(${i},'answer',this.value)" placeholder="الإجابة" rows="2"
+      <textarea oninput="updateCompField(${i},'answer',this.value)" placeholder="${currentCompIsPersonality ? 'محتوى المكوّن' : 'الإجابة'}" rows="2"
         style="width:100%;padding:7px 10px;background:var(--input-bg);border:1px solid var(--border-subtle-3);border-radius:8px;color:var(--text);font-family:Cairo,sans-serif;font-size:0.8rem;direction:rtl;resize:vertical;">${escapeHtml(c.answer||'')}</textarea>
       <div style="font-size:0.65rem;color:var(--text-faint);margin-top:4px;">${c.source === 'manual' ? '✏️ معدَّل يدوياً' : '🤖 مولَّد تلقائياً'}</div>
     </div>`).join('');
+  updateAddCompBtn();
+}
+
+// Personalities hold at most 3 components; the add button reflects that.
+function updateAddCompBtn() {
+  const btn = document.getElementById('add-comp-btn');
+  if (!btn) return;
+  const full = currentCompIsPersonality && compRows.length >= 3;
+  btn.disabled = full;
+  btn.textContent = full ? '➕ إضافة مكون (الحد الأقصى 3 للشخصية)' : '➕ إضافة مكون';
 }
 
 function updateCompField(i, field, value) {
@@ -1928,7 +1979,9 @@ function removeCompRow(i) {
 }
 
 function addComponentRow() {
-  compRows.push({ word_id: currentCompWordId, question: '', answer: '', semantic_role: 'other', color_role: 'orange', source: 'manual' });
+  if (currentCompIsPersonality && compRows.length >= 3) { showToast('⚠️ الشخصية لها ثلاثة مكونات كحد أقصى'); return; }
+  const role = currentCompIsPersonality ? (PERSONALITY_DEFAULT_ROLES[compRows.length] || 'other') : 'other';
+  compRows.push({ word_id: currentCompWordId, question: '', answer: '', semantic_role: role, color_role: ROLE_TO_COLOR[role], source: 'manual' });
   renderCompRows();
 }
 
@@ -1942,11 +1995,16 @@ async function saveComponents() {
     word_id: currentCompWordId, question: c.question.trim(), answer: c.answer.trim(),
     semantic_role: c.semantic_role, color_role: c.color_role, order_index: i, source: c.source || 'manual'
   }));
+  if (currentCompIsPersonality && (rows.length < 2 || rows.length > 3)) {
+    showToast('⚠️ يجب أن تحتوي الشخصية على مكونين أو ثلاثة (عنوان + محتوى لكل مكون)');
+    btn.disabled = false; btn.textContent = '💾 حفظ';
+    return;
+  }
   const { error } = await dbWrite(db.rpc('replace_word_components', { p_word_id: currentCompWordId, p_rows: rows }), { context: 'saveComponents', message: 'تعذّر حفظ المكونات، حاول مرة أخرى.' });
   if (error) { btn.disabled = false; btn.textContent = '💾 حفظ'; return; }
 
   btn.disabled = false; btn.textContent = '💾 حفظ';
-  showToast('✅ تم حفظ المكونات');
+  showToast(currentCompIsPersonality ? '✅ تم حفظ المكونات وتحديث تعريف الشخصية' : '✅ تم حفظ المكونات');
   closeCompModal();
   await loadComponentWords();
 }
@@ -1983,6 +2041,7 @@ async function regenerateComponents() {
 function closeCompModal() {
   document.getElementById('comp-modal').classList.remove('active');
   currentCompWordId = null;
+  currentCompIsPersonality = false;
   compRows = [];
 }
 

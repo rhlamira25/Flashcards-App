@@ -752,6 +752,17 @@ button{-webkit-tap-highlight-color:transparent;}
 .card-term{color:var(--text);font-size:clamp(1.35rem,5vw,1.85rem);}
 .card-hint{color:var(--text-muted);}
 .card-def{color:var(--text);font-size:.94rem;line-height:1.85;}
+/* Structured (component-based) personality definition */
+.sdef{display:flex;flex-direction:column;gap:8px;width:100%;text-align:right;}
+.sdef-part{border:1.5px solid var(--sdef-c,#888);background:var(--sdef-bg,rgba(136,136,136,.1));border-radius:12px;padding:9px 12px;}
+.sdef-q{font-size:.72rem;font-weight:700;color:var(--sdef-c,#888);margin-bottom:2px;line-height:1.4;}
+.sdef-a{font-size:.88rem;color:var(--text);line-height:1.7;}
+.card-def .sdef-a{font-size:.88rem;line-height:1.65;}
+.correct-def .sdef-a{font-size:.84rem;line-height:1.6;}
+.word-correct-def .sdef{margin-top:6px;gap:5px;}
+.word-correct-def .sdef-part{padding:6px 9px;border-radius:9px;}
+.word-correct-def .sdef-q{font-size:.66rem;}
+.word-correct-def .sdef-a{font-size:.76rem;line-height:1.5;}
 .score-tag{background:var(--accent-dim);color:var(--accent);}
 
 /* QCM */
@@ -2020,6 +2031,8 @@ syncThemeIcons();
 // ══════════════════════════════════════
 // { history: { term: { 1: {1:[...],2:[...]}, 2: {...} }, date: {...}, personality: {...} }, geography: {...} }
 let ALL_WORDS_DB = {};
+// Admin-editable component breakdown of each personality (word_components rows), keyed by word id.
+let PERSONALITY_COMPS = {};
 // Safe, content-free structural catalog (from the word_group_catalog view) -- covers
 // EVERY group regardless of tier, so FREE users can see the full curriculum structure
 // (including locked groups) without ever loading locked concept content. Never put
@@ -2065,8 +2078,47 @@ async function loadWordsFromDB() {
     if (!newCatalog[subj][ct][tri]) newCatalog[subj][ct][tri] = {};
     newCatalog[subj][ct][tri][grp] = { name: r.group_name, allFree: !!r.all_free, count: r.concept_count };
   });
+  // Components of the personalities (2-3 titled parts each, edited by admins like concept components).
+  const personalityIds = [];
+  Object.values(newWords).forEach(byCt => Object.values(byCt.personality || {}).forEach(byTri => Object.values(byTri).forEach(list => list.forEach(w => personalityIds.push(w.id)))));
+  const newPersComps = {};
+  if (personalityIds.length) {
+    try {
+      const { data: pc } = await withTimeout(db.from('word_components').select('*').in('word_id', personalityIds).order('order_index'));
+      (pc || []).forEach(c => { (newPersComps[c.word_id] = newPersComps[c.word_id] || []).push(c); });
+    } catch (e) { console.error('Personality components failed to load (definitions fall back to plain text):', e); }
+    if (epoch !== AUTH_EPOCH) return false;
+  }
+  PERSONALITY_COMPS = newPersComps;
   ALL_WORDS_DB = newWords; GROUP_CATALOG = newCatalog; CONTENT_READY = true;
   return true;
+}
+
+// ── Structured personality definitions ──
+// A personality with components is shown as separate, titled parts (same colour roles as the guided
+// concept components) instead of one long paragraph. Anything without components keeps plain text.
+function structuredDefHtml(comps) {
+  return '<div class="sdef">' + comps.map(c => {
+    const col = GUIDED_COLOR_HEX[c.color_role] || '#888888';
+    return `<div class="sdef-part" style="--sdef-c:${col};--sdef-bg:${col}1a;"><div class="sdef-q">${escapeHtml(c.question)}</div><div class="sdef-a">${escapeHtml(c.answer)}</div></div>`;
+  }).join('') + '</div>';
+}
+function defHtmlInline(wordId, text) {
+  const comps = PERSONALITY_COMPS[wordId];
+  return comps && comps.length ? structuredDefHtml(comps) : escapeHtml(text);
+}
+// Sets a definition element: structured parts for personalities, plain text for everything else.
+// Flip-cards are absolutely positioned, so the card grows to fit the structured content.
+function setDefDisplay(el, wordId, text) {
+  if (!el) return;
+  const comps = PERSONALITY_COMPS[wordId];
+  const inner = el.closest ? el.closest('.card-inner') : null;
+  if (comps && comps.length) el.innerHTML = structuredDefHtml(comps); else el.textContent = text;
+  if (inner) {
+    inner.style.minHeight = '';
+    const face = el.closest('.card-face');
+    requestAnimationFrame(() => { if (face && comps && comps.length) inner.style.minHeight = Math.max(inner.offsetHeight, face.offsetHeight) + 'px'; });
+  }
 }
 
 // Full group list for a subject/content-type/trimester, INCLUDING locked groups --
@@ -2583,7 +2635,7 @@ async function showFlashcard() {
 function renderFC() {
   const w = WORDS[fcIdx];
   document.getElementById('fc-term').textContent = w.term;
-  document.getElementById('fc-def').textContent = w.def;
+  setDefDisplay(document.getElementById('fc-def'), w.id, w.def);
   document.getElementById('fc-counter').textContent = (fcIdx+1)+' / '+WORDS.length;
   const s = progress.scores[w.id]; const sc = document.getElementById('fc-scores'); sc.innerHTML = '';
   // Historical/raw per-test scores -- kept as-is, these are legitimately just
@@ -4320,10 +4372,10 @@ function dismissCategoryOrderExplainer() {
 async function proceedPlanLearnSession() {
   if (!currentPlan) return;
   const today = todayStr();
-  const { data: due } = await db.from('plan_concepts').select('*, words(id, term, definition, subject)')
+  const { data: due } = await db.from('plan_concepts').select('*, words(id, term, definition, subject, content_type)')
     .eq('plan_id', currentPlan.id).eq('status', 'pending').lte('scheduled_date', today).order('id');
   if (!due || !due.length) { openReviewHub(); return; }
-  planLearnWords = due.filter(d => d.words).map(d => ({ id: d.words.id, term: d.words.term, def: d.words.definition, subject: d.words.subject }));
+  planLearnWords = due.filter(d => d.words).map(d => ({ id: d.words.id, term: d.words.term, def: d.words.definition, subject: d.words.subject, content_type: d.words.content_type || 'term' }));
 
   // Attach guided-memorisation components (if any) to each word — §word_components.
   // A word with none falls back to the plain flip-card, exactly as before.
@@ -4436,11 +4488,11 @@ let guidedQIdx = 0;
 let allCompWordsPool = []; // all decomposed words, cached per session — distractor source for the complete-definition QCM
 
 async function loadAllCompWordsPool() {
-  const { data: words } = await db.from('words').select('id, term, subject');
+  const { data: words } = await db.from('words').select('id, term, subject, content_type');
   const { data: comps } = await db.from('word_components').select('*');
   const byWord = {};
   (comps || []).forEach(c => { (byWord[c.word_id] = byWord[c.word_id] || []).push(c); });
-  allCompWordsPool = (words || []).map(w => ({ id: w.id, subject: w.subject, components: byWord[w.id] || [] })).filter(w => w.components.length > 0);
+  allCompWordsPool = (words || []).map(w => ({ id: w.id, subject: w.subject, content_type: w.content_type || 'term', components: byWord[w.id] || [] })).filter(w => w.components.length > 0);
 }
 
 const GUIDED_COLOR_HEX = { blue: '#5b8def', yellow: '#e0b23d', green: '#4aaa70', purple: '#a06cd5', orange: '#e0793d' };
@@ -4526,7 +4578,7 @@ function buildCompleteDefinitionOptionsFallback(word) {
   // that has nothing to do with actually knowing the content.
   const pool = {};
   allCompWordsPool.forEach(ow => {
-    if (ow.id === word.id || ow.subject !== word.subject) return;
+    if (ow.id === word.id || ow.subject !== word.subject || (ow.content_type || 'term') !== (word.content_type || 'term')) return;
     (ow.components || []).forEach(c => { (pool[c.semantic_role] = pool[c.semantic_role] || []).push(c); });
   });
 
@@ -4673,7 +4725,7 @@ async function startComponentQuiz() {
 
   cqQuestions = [];
   allCompWordsPool.filter(w => dueWordIds.includes(w.id)).forEach(w => {
-    w.components.forEach(c => cqQuestions.push({ component: c, term: termById[w.id] || '', subject: w.subject, distractors: distByComponent[c.id] || [], priorProficiency: profByComponent[c.id] }));
+    w.components.forEach(c => cqQuestions.push({ component: c, term: termById[w.id] || '', subject: w.subject, content_type: w.content_type, distractors: distByComponent[c.id] || [], priorProficiency: profByComponent[c.id] }));
   });
 
   if (!cqQuestions.length) { showToast('لا توجد مكونات متاحة للمراجعة السريعة حالياً — جرّب المراجعة العادية'); return; }
@@ -4719,7 +4771,7 @@ function buildComponentQCMOptions(q) {
   const options = [{ text: c.answer, correct: true }];
   const candidates = [];
   allCompWordsPool.forEach(w => {
-    if (w.subject !== q.subject) return;
+    if (w.subject !== q.subject || (w.content_type || 'term') !== (q.content_type || 'term')) return;
     w.components.forEach(oc => { if (oc.semantic_role === c.semantic_role && oc.answer !== c.answer) candidates.push(oc); });
   });
   const uniqueByText = [...new Map(candidates.map(c2 => [c2.answer, c2])).values()];
@@ -4809,7 +4861,7 @@ function showReviewResults() {
   const wordsEl = document.getElementById('res-words'); wordsEl.innerHTML = '';
   rwAnswers.forEach(a => {
     const score = a.match.score; const level = classifyProficiency(score);
-    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${escapeHtml(a.word.def)}</div>` : '';
+    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${defHtmlInline(a.word.id, a.word.def)}</div>` : '';
     wordsEl.innerHTML += `<div class="word-result"><div class="word-result-term">${level.emoji} ${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}</div>`;
   });
   const retryBtn = document.querySelector('#pg-results .nav .btn-ghost');
@@ -4829,7 +4881,7 @@ function showPlanLearnResults() {
   const wordsEl = document.getElementById('res-words'); wordsEl.innerHTML = '';
   rwAnswers.forEach(a => {
     const score = a.match.score; const level = classifyProficiency(score);
-    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${escapeHtml(a.word.def)}</div>` : '';
+    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${defHtmlInline(a.word.id, a.word.def)}</div>` : '';
     wordsEl.innerHTML += `<div class="word-result"><div class="word-result-term">${level.emoji} ${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}</div>`;
   });
   const retryBtn = document.querySelector('#pg-results .nav .btn-ghost');
@@ -5444,7 +5496,7 @@ function startSecondChance(weakAnswers) {
 function renderSecondChanceCard() {
   const w = scWeakAnswers[scIdx].word;
   document.getElementById('sc-term').textContent = w.term;
-  document.getElementById('sc-def').textContent = w.def;
+  setDefDisplay(document.getElementById('sc-def'), w.id, w.def);
   document.getElementById('sc-card-inner').classList.remove('flipped');
   document.getElementById('sc-counter').textContent = (scIdx+1) + ' / ' + scWeakAnswers.length;
   document.getElementById('sc-retest-btn').style.display = (scIdx === scWeakAnswers.length - 1) ? 'block' : 'none';
@@ -5519,7 +5571,7 @@ async function submitRW() {
   document.getElementById('rw-diff-box').innerHTML = '<span style="color:var(--text-sub);font-size:0.8rem;">...جاري التحليل</span>';
   const segments = await buildDiffFeedback(w.id, w.def, input);
   renderDiffFeedback(segments);
-  document.getElementById('rw-correct').textContent=w.def;
+  setDefDisplay(document.getElementById('rw-correct'), w.id, w.def);
   document.getElementById('rw-pending-note').style.display = match.matchType==='unknown' ? 'block' : 'none';
   const isCasualFlow = !isReviewSession && !isPlanLearnSession && !isSecondChanceRetest;
   let casualAnswerRowId = null;
@@ -5628,7 +5680,7 @@ async function showResultsRW() {
   rwAnswers.forEach(a => {
     const score = a.match.score;
     const level = classifyProficiency(score);
-    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${escapeHtml(a.word.def)}</div>` : '';
+    const corDef = score<90 ? `<div class="word-correct-def"><strong>الصحيح: </strong>${defHtmlInline(a.word.id, a.word.def)}</div>` : '';
     const pendingNote = a.match.matchType==='unknown' ? `<div style="font-size:0.7rem;color:var(--text-sub);margin-top:2px;">قيد مراجعة المشرف — إجابتك قد تُقبل كبديل صحيح</div>` : '';
     wordsEl.innerHTML+=`<div class="word-result"><div class="word-result-term">${level.emoji} ${escapeHtml(a.word.term)}</div><div class="bar-wrap"><div class="bar-fill" style="width:${score}%;background:${barColor(score)}"></div></div><div class="word-result-pct" style="color:${barColor(score)}">${score}%</div>${corDef}${pendingNote}</div>`;
   });
@@ -5667,7 +5719,7 @@ function showSearchResult(id) {
   document.getElementById('search-input').value = '';
   // Show word in flashcard view
   document.getElementById('fc-term').textContent = word.term;
-  document.getElementById('fc-def').textContent = word.def;
+  setDefDisplay(document.getElementById('fc-def'), word.id, word.def);
   document.getElementById('fc-counter').textContent = '—';
   document.getElementById('fc-scores').innerHTML = '';
   document.getElementById('card-inner').classList.remove('flipped');
