@@ -1240,7 +1240,10 @@ select.form-input{appearance:auto;}
     <div class="mode-card" id="mode-card-qcm" onclick="handleModeClick('startQCM')"><div class="mode-icon">☑️</div><div class="mode-title">اختبار QCM <span id="qcm-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">4 خيارات لكل مصطلح — اختر الإجابة الصحيحة</div></div>
     <div class="mode-card" id="mode-card-writing" onclick="handleModeClick('startRewrite')"><div class="mode-icon">✍️</div><div class="mode-title">اختبار الكتابة <span id="rw-draft-badge" style="display:none;font-size:0.65rem;background:var(--accent);color:var(--btn-text);border-radius:8px;padding:1px 7px;vertical-align:middle;margin-right:4px;">متابعة</span></div><div class="mode-desc">اكتب التعريف بنفسك وستحصل على نسبة دقة</div></div>
   </div>
+  <div id="map-exercises" style="display:none;width:100%;max-width:420px;margin-top:14px;"></div>
 </div>
+<!-- PAGE: MAP EXERCISE (draw-boundary-and-classify) -->
+<div id="pg-map-boundary" class="page"><div id="mb-root"></div></div>
 
 <!-- ══ PAGE: DASHBOARD (streak / mastery / due) ══ -->
 <div id="pg-dashboard" class="page">
@@ -2162,6 +2165,7 @@ function handleModeClick(fnName) {
 // whenever the selected group/content-type/trimester changes (switchGroup/switchContentType/
 // switchTrimester) -- purely presentational, never the actual access boundary.
 function updateModeCardLocks() {
+  if (typeof refreshMapExercises === 'function') refreshMapExercises(); // map-exercise cards (Geography only)
   const locked = isCurrentGroupLocked();
   ['mode-card-flashcards','mode-card-qcm','mode-card-writing'].forEach(id => {
     const el = document.getElementById(id);
@@ -5887,6 +5891,35 @@ registerServiceWorker();
   }
 })();
 </script>
+
+<!-- ═══ MAP EXERCISES (draw-boundary-and-classify) — added; practice entry only ═══ -->
+<script>
+(function () {
+  let cache = null, cachedAt = 0;
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // Shows the map-exercise cards on the Geography menu. Safe to call often (cached 5 min, fails silently).
+  window.refreshMapExercises = async function () {
+    const box = document.getElementById('map-exercises'); if (!box) return;
+    if (currentSubject !== 'geography' || !appReady()) { box.style.display = 'none'; return; }
+    try {
+      if (!cache || Date.now() - cachedAt > 300000) {
+        const { data, error } = await db.from('map_exercises').select('id,title').eq('is_active', true).order('created_at');
+        if (error) throw error; cache = data || []; cachedAt = Date.now();
+      }
+    } catch (e) { console.error('map exercises', e); box.style.display = 'none'; return; }
+    if (!cache.length) { box.style.display = 'none'; return; }
+    box.style.display = 'block';
+    box.innerHTML = cache.map(x => `<div class="mode-card" onclick="openMapExercise('${esc(x.id)}')" style="width:100%;margin-bottom:10px;"><div class="mode-icon">🗺️</div><div class="mode-title">${esc(x.title)}</div><div class="mode-desc">تمرين خريطة تفاعلي: ارسم الحدّ الفاصل ولوّن المنطقتين</div></div>`).join('');
+  };
+  window.openMapExercise = async function (id) {
+    if (!appReady()) return;
+    MapBoundary.init({ db, supabaseUrl: SUPABASE_URL, base: 'maps/', onBack: () => goMenu() });
+    showPage('map-boundary'); window.scrollTo(0, 0);
+    await MapBoundary.open(id, 'practice');
+  };
+})();
+</script>
+<script src="maps/boundary-exercise-ui.js?v=1"></script>
 
 <!-- KEYBOARD EXPLAINER — mobile only, shown once before the first writing test of the session -->
 <div class="kb-explainer-overlay" id="kb-explainer-overlay">
